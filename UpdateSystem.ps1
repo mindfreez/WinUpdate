@@ -13,7 +13,6 @@ $installSummary = @()
 $psWindowsUpdateAvailable = $false
 $successfullyInstalledUpdates = $false
 
-# Create log directory
 try {
     if (-not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
@@ -22,7 +21,6 @@ try {
     Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
 }
 
-# Start transcript
 try {
     Start-Transcript -Path $logFile -Append -Force -ErrorAction Stop
 } catch {
@@ -32,13 +30,10 @@ try {
 function Write-Log {
     param($Message, [switch]$Verbose)
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
-    # Write to transcript only (via Start-Transcript capturing Write-Output)
     Write-Output $logMessage
-    # Write to console without transcript capture
     if ($Verbose -or $DebugMode) {
         [Console]::WriteLine($logMessage)
     }
-    # Write to file directly
     try {
         Add-Content -Path $logFile -Value $logMessage -ErrorAction SilentlyContinue
     } catch {
@@ -158,7 +153,8 @@ try {
             Write-Log "Opening Microsoft Store for manual verification..." -Verbose
             Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
             Write-Log "Microsoft Store launched." -Verbose
-            Start-Sleep -Seconds 600
+            # Wait for a shorter duration for testing
+            Start-Sleep -Seconds 120
             try {
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
