@@ -5,7 +5,6 @@ param (
     [switch]$DebugMode
 )
 
-# Initialize variables
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
 $logFile = "$logDir\UpdateScript_Transcript_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 $fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -14,7 +13,6 @@ $installSummary = @()
 $psWindowsUpdateAvailable = $false
 $successfullyInstalledUpdates = $false
 
-# Ensure log directory exists
 try {
     if (-not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
@@ -23,14 +21,12 @@ try {
     Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)" | Out-File -FilePath $fallbackLogFile -Append
 }
 
-# Start transcript with fallback
 try {
     Start-Transcript -Path $logFile -Append -Force -ErrorAction Stop
 } catch {
     Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $logFile : $($_.Exception.Message)" | Out-File -FilePath $fallbackLogFile -Append
 }
 
-# Helper Functions
 function Write-Log {
     param($Message, [switch]$Verbose)
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
@@ -56,9 +52,7 @@ function Stop-LockingProcesses {
     }
 }
 
-# Main script
 try {
-    # Install PSWindowsUpdate module
     Write-Log "Checking for PSWindowsUpdate module..." -Verbose
     try {
         if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
@@ -73,7 +67,6 @@ try {
         $failedUpdates += "Failed to install/import module PSWindowsUpdate: $($_.Exception.Message)"
     }
 
-    # Install Windows updates
     if ($psWindowsUpdateAvailable) {
         Write-Log "Checking for Windows updates..." -Verbose
         try {
@@ -97,7 +90,6 @@ try {
         Write-Log "PSWindowsUpdate unavailable. Skipping Windows updates." -Verbose
     }
 
-    # Install non-Store app updates via winget
     Write-Log "Checking for non-Store app updates via winget..." -Verbose
     try {
         $wingetOutput = winget upgrade --source winget --accept-source-agreements | Out-String
@@ -142,17 +134,14 @@ try {
         $failedUpdates += "Failed non-Store app updates: $($_.Exception.Message)"
     }
 
-    # Install Microsoft Store updates via winget
     if (-not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
         Write-Log "Attempting to update Microsoft Store apps via winget..." -Verbose
         try {
-            # Ensure msstore source is available
             $sourceList = winget source list | Out-String
             if ($sourceList -notmatch "msstore") {
                 Write-Log "Adding msstore source..." -Verbose
                 winget source add --name msstore --arg https://storeedgefd.dsx.mp.microsoft.com | Out-String | Write-Log
             }
-            # Run winget upgrade for msstore
             $storeOutput = winget upgrade --source msstore --accept-source-agreements --accept-package-agreements --silent | Out-String
             Write-Log "winget msstore upgrade output: $storeOutput" -Verbose
             if ($storeOutput -match "No applicable updates found") {
@@ -161,11 +150,10 @@ try {
                 Write-Log "Microsoft Store app updates initiated." -Verbose
                 $installSummary += "Initiated Microsoft Store app updates via winget"
             }
-            # Open Store as fallback
             Write-Log "Opening Microsoft Store for manual verification..." -Verbose
             Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
             Write-Log "Microsoft Store launched." -Verbose
-            Start-Sleep -Seconds 600 # Wait 10 minutes for updates
+            Start-Sleep -Seconds 600
             try {
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
@@ -181,7 +169,6 @@ try {
         Write-Log "Skipping Microsoft Store updates due to critical PSWindowsUpdate failure." -Verbose
     }
 
-    # Check for pending reboot
     Write-Log "Checking for pending reboot..." -Verbose
     $rebootRequired = $false
     try {
@@ -204,7 +191,6 @@ try {
         Write-Log "Warning: Failed to check for pending reboot: $($_.Exception.Message)"
     }
 
-    # Handle reboot
     if ($rebootRequired -and $successfullyInstalledUpdates) {
         Write-Log "Critical updates installed. Reboot required." -Verbose
         if ($DebugMode) {
@@ -227,7 +213,6 @@ try {
         Write-Log "No reboot required." -Verbose
     }
 
-    # Clean up old logs
     Write-Log "Cleaning up old logs..." -Verbose
     try {
         Get-ChildItem -Path $logDir -Filter "UpdateScript_Transcript_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -236,7 +221,6 @@ try {
         Write-Log "Warning: Failed to clean up old logs: $($_.Exception.Message)"
     }
 
-    # Final summary
     Write-Log "Installation Summary:" -Verbose
     foreach ($item in $installSummary) {
         Write-Log $item -Verbose
@@ -248,7 +232,6 @@ try {
         }
     }
 
-    # Check for critical failures
     if ($failedUpdates -match "Failed to install/import module PSWindowsUpdate") {
         Write-Log "Critical failure detected. Exiting with code 1." -Verbose
         throw "Critical failure: PSWindowsUpdate module issue"
