@@ -13,6 +13,7 @@ $installSummary = @()
 $psWindowsUpdateAvailable = $false
 $successfullyInstalledUpdates = $false
 
+# Ensure log directory exists
 try {
     if (-not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
@@ -21,6 +22,7 @@ try {
     Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
 }
 
+# Start transcript
 try {
     Start-Transcript -Path $logFile -Append -Force -ErrorAction Stop
 } catch {
@@ -68,7 +70,7 @@ try {
     }
 
     if ($psWindowsUpdateAvailable) {
-        Write-Log "Checking for Windows updates..." -Verbose
+        Write-Log "Checking for Windows updates (including Defender definitions)..." -Verbose
         try {
             Write-Log "Running Get-WindowsUpdate..." -Verbose
             $updates = Get-WindowsUpdate -MicrosoftUpdate -AcceptAll -ErrorAction Stop
@@ -77,7 +79,7 @@ try {
                 Write-Progress -Activity "Installing Windows updates" -Status "Starting..."
                 Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object { Write-Log $_ -Verbose }
                 $successfullyInstalledUpdates = $true
-                $installSummary += "Installed $($updates.Count) Windows updates"
+                $installSummary += "Installed $($updates.Count) Windows updates (including Defender definitions)"
                 Write-Progress -Activity "Installing Windows updates" -Completed
             } else {
                 Write-Log "No Windows updates to install." -Verbose
@@ -101,14 +103,14 @@ try {
             $lines = $wingetOutput -split "`n"
             foreach ($line in $lines) {
                 $line = $line.Trim()
-                # Match lines with at least 4 columns separated by 2+ spaces
-                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
+                # Match lines with exactly 4 columns: Name, Id, Version, Available
+                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+)$" -and $matches) {
                     $name = $matches[1].Trim()
                     $id = $matches[2].Trim()
                     $currentVersion = $matches[3].Trim()
                     $availableVersion = $matches[4].Trim()
-                    # Ensure the line is not a header or separator
-                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notlike "*---*") {
+                    # Ensure the line is not a header, separator, or summary line
+                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notlike "*---*" -and $line -notmatch "upgrades available" -and $line -notmatch "package\(s\) have version numbers") {
                         $updatesList += [PSCustomObject]@{
                             Name = $name
                             Id = $id
