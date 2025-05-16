@@ -55,6 +55,22 @@ function Stop-LockingProcesses {
 }
 
 try {
+    # Detect PC Model and OS Details
+    Write-Log "Detecting system information..." -Verbose
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
+        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem
+        $pcModel = "$($computerSystem.Manufacturer) $($computerSystem.Model)"
+        $osName = $osInfo.Caption
+        $osEdition = $osInfo.OSEdition
+        $osVersion = $osInfo.Version
+        $osBuild = $osInfo.BuildNumber
+        Write-Log "PC Model: $pcModel" -Verbose
+        Write-Log "OS: $osName (Edition: $osEdition, Version: $osVersion, Build: $osBuild)" -Verbose
+    } catch {
+        Write-Log "Warning: Failed to detect system information: $($_.Exception.Message)" -Verbose
+    }
+
     Write-Log "Checking for PSWindowsUpdate module..." -Verbose
     try {
         if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
@@ -66,7 +82,7 @@ try {
         Write-Log "PSWindowsUpdate module ready." -Verbose
     } catch {
         Write-Log "Error: Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
-        $failedUpdates += "Failed to install/import module PSWindowsUpdate: $($_.Exception.Message)"
+        $failedUpdates += "Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
     }
 
     if ($psWindowsUpdateAvailable) {
@@ -75,9 +91,14 @@ try {
             Write-Log "Running Get-WindowsUpdate..." -Verbose
             $updates = Get-WindowsUpdate -MicrosoftUpdate -AcceptAll -ErrorAction Stop
             if ($updates) {
-                Write-Log "Found $($updates.Count) Windows updates to install." -Verbose
+                Write-Log "Found $($updates.Count) Windows updates to install:" -Verbose
+                foreach ($update in $updates) {
+                    Write-Log "Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
+                }
                 Write-Progress -Activity "Installing Windows updates" -Status "Starting..."
-                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object { Write-Log $_ -Verbose }
+                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object {
+                    Write-Log "Install-WindowsUpdate Output: $_" -Verbose
+                }
                 $successfullyInstalledUpdates = $true
                 $installSummary += "Installed $($updates.Count) Windows updates (including Defender definitions)"
                 Write-Progress -Activity "Installing Windows updates" -Completed
@@ -108,9 +129,20 @@ try {
 
     Write-Log "Checking for non-Store app updates via winget..." -Verbose
     try {
+        # Ensure no background winget processes are running
+        Write-Log "Checking for existing winget processes..." -Verbose
+        $wingetProcess = Get-Process -Name "winget" -ErrorAction SilentlyContinue
+        if ($wingetProcess) {
+            Write-Log "Found existing winget process (PID: $($wingetProcess.Id)). Terminating..." -Verbose
+            Stop-Process -Name "winget" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+        }
+
         $wingetOutput = winget upgrade --source winget --accept-source-agreements | Out-String
         Write-Log "Raw winget upgrade output: $wingetOutput"
-        if ($wingetOutput -match "No applicable updates found") {
+        if ($wingetOutput -match "No installed package found matching input criteria") {
+            Write-Log "No non-Store app updates available (winget found no matching packages)." -Verbose
+        } elseif ($wingetOutput -match "No applicable updates found") {
             Write-Log "No non-Store app updates available." -Verbose
         } else {
             $updatesList = @()
@@ -196,6 +228,12 @@ try {
     Write-Log "Checking for pending reboot..." -Verbose
     $rebootRequired = $false
     try {
+        $lastBoot = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime
+        $uptime = (Get-Date) - $lastBoot
+        if ($uptime.Days -ge 30) {
+            Write-Log "System has been running for $($uptime.Days) days. Reboot recommended." -Verbose
+            $rebootRequired = $true
+        }
         $pendingFileRename = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
         if ($pendingFileRename) {
             Write-Log "Pending reboot: File rename operations detected." -Verbose
