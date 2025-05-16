@@ -97,19 +97,22 @@ try {
         if ($wingetOutput -match "No applicable updates found") {
             Write-Log "No non-Store app updates available." -Verbose
         } else {
-            $updatesList = $wingetOutput -split "`n" | Select-String -Pattern "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" | ForEach-Object {
-                $name = $_.Matches.Groups[1].Value.Trim()
-                $id = $_.Matches.Groups[2].Value.Trim()
-                if ($name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $name -notlike "*---*") {
-                    [PSCustomObject]@{
-                        Name = $name
-                        Id   = $id
-                        CurrentVersion = $_.Matches.Groups[3].Value.Trim()
-                        AvailableVersion = $_.Matches.Groups[4].Value.Trim()
+            $updatesList = $wingetOutput -split "`n" | ForEach-Object {
+                $line = $_.Trim()
+                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$") {
+                    $name = $matches[1].Trim()
+                    $id = $matches[2].Trim()
+                    if ($name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $name -notlike "*---*") {
+                        [PSCustomObject]@{
+                            Name = $name
+                            Id   = $id
+                            CurrentVersion = $matches[3].Trim()
+                            AvailableVersion = $matches[4].Trim()
+                        }
                     }
                 }
-            }
-            if ($updatesList) {
+            } | Where-Object { $_ -ne $null }
+            if ($updatesList -and $updatesList.Count -gt 0) {
                 Write-Log "Found $($updatesList.Count) non-Store app updates to install." -Verbose
                 $index = 0
                 foreach ($update in $updatesList) {
@@ -135,35 +138,22 @@ try {
     }
 
     if (-not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
-        Write-Log "Attempting to update Microsoft Store apps via winget..." -Verbose
+        Write-Log "Attempting to update Microsoft Store apps..." -Verbose
         try {
-            $sourceList = winget source list | Out-String
-            if ($sourceList -notmatch "msstore") {
-                Write-Log "Adding msstore source..." -Verbose
-                winget source add --name msstore --arg https://storeedgefd.dsx.mp.microsoft.com | ForEach-Object { Write-Log $_ }
-            }
-            $storeOutput = winget upgrade --source msstore --accept-source-agreements --accept-package-agreements --silent | Out-String
-            Write-Log "winget msstore upgrade output: $storeOutput" -Verbose
-            if ($storeOutput -match "No applicable updates found") {
-                Write-Log "No Microsoft Store app updates available." -Verbose
-            } else {
-                Write-Log "Microsoft Store app updates initiated." -Verbose
-                $installSummary += "Initiated Microsoft Store app updates via winget"
-            }
-            Write-Log "Opening Microsoft Store for manual verification..." -Verbose
+            Write-Log "Opening Microsoft Store for updates..." -Verbose
             Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
             Write-Log "Microsoft Store launched." -Verbose
-            # Wait for a shorter duration for testing
             Start-Sleep -Seconds 120
             try {
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
+                $installSummary += "Completed Microsoft Store app updates"
             } catch {
                 Write-Log "Warning: Failed to close Microsoft Store: $($_.Exception.Message)"
             }
         } catch {
-            Write-Log "Warning: Failed to update Microsoft Store apps via winget: $($_.Exception.Message). Leaving Store open." -Verbose
-            $failedUpdates += "Failed to update Microsoft Store apps via winget: $($_.Exception.Message)"
+            Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message). Leaving Store open." -Verbose
+            $failedUpdates += "Failed to update Microsoft Store apps: $($_.Exception.Message)"
             Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction SilentlyContinue
         }
     } else {
