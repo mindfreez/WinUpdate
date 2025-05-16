@@ -82,7 +82,7 @@ try {
                 $installSummary += "Installed $($updates.Count) Windows updates (including Defender definitions)"
                 Write-Progress -Activity "Installing Windows updates" -Completed
             } else {
-                Write-Log "No Windows updates to install." -Verbose
+                Write-Log "No Windows updates to install via PSWindowsUpdate." -Verbose
             }
         } catch {
             Write-Log "Error: Failed to install Windows updates: $($_.Exception.Message)"
@@ -90,6 +90,20 @@ try {
         }
     } else {
         Write-Log "PSWindowsUpdate unavailable. Skipping Windows updates." -Verbose
+    }
+
+    # Explicitly check for Microsoft Defender updates
+    Write-Log "Checking for Microsoft Defender definition updates..." -Verbose
+    try {
+        # Ensure Defender module is available
+        Import-Module -Name Defender -ErrorAction Stop
+        Write-Log "Running Update-MpSignature to update Defender definitions..." -Verbose
+        Update-MpSignature -ErrorAction Stop
+        Write-Log "Microsoft Defender definitions updated successfully." -Verbose
+        $installSummary += "Updated Microsoft Defender definitions"
+    } catch {
+        Write-Log "Warning: Failed to update Microsoft Defender definitions: $($_.Exception.Message)"
+        $failedUpdates += "Failed to update Microsoft Defender definitions: $($_.Exception.Message)"
     }
 
     Write-Log "Checking for non-Store app updates via winget..." -Verbose
@@ -103,8 +117,8 @@ try {
             $lines = $wingetOutput -split "`n"
             foreach ($line in $lines) {
                 $line = $line.Trim()
-                # Match lines with exactly 4 columns: Name, Id, Version, Available
-                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+)$" -and $matches) {
+                # Adjusted regex to match variable spaces more flexibly
+                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
                     $name = $matches[1].Trim()
                     $id = $matches[2].Trim()
                     $currentVersion = $matches[3].Trim()
