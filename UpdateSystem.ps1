@@ -99,15 +99,15 @@ try {
         } else {
             $updatesList = $wingetOutput -split "`n" | ForEach-Object {
                 $line = $_.Trim()
-                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$") {
-                    $name = $matches[1].Trim()
-                    $id = $matches[2].Trim()
-                    if ($name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $name -notlike "*---*") {
+                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
+                    $name = if ($matches[1]) { $matches[1].Trim() } else { $null }
+                    $id = if ($matches[2]) { $matches[2].Trim() } else { $null }
+                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $name -notlike "*---*") {
                         [PSCustomObject]@{
                             Name = $name
                             Id   = $id
-                            CurrentVersion = $matches[3].Trim()
-                            AvailableVersion = $matches[4].Trim()
+                            CurrentVersion = if ($matches[3]) { $matches[3].Trim() } else { "Unknown" }
+                            AvailableVersion = if ($matches[4]) { $matches[4].Trim() } else { "Unknown" }
                         }
                     }
                 }
@@ -148,7 +148,9 @@ try {
             Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
             Write-Log "Microsoft Store launched." -Verbose
             $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
-            if (-not $storeProcess) {
+            if ($storeProcess) {
+                Write-Log "Microsoft Store process found (PID: $($storeProcess.Id))." -Verbose
+            } else {
                 Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
             }
             Start-Sleep -Seconds 120
