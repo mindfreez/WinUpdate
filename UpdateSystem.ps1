@@ -13,35 +13,36 @@ $installSummary = @()
 $psWindowsUpdateAvailable = $false
 $successfullyInstalledUpdates = $false
 
+# Create log directory
 try {
     if (-not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
     }
 } catch {
-    Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)" | Out-File -FilePath $fallbackLogFile -Append
+    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
 }
 
+# Start transcript
 try {
     Start-Transcript -Path $logFile -Append -Force -ErrorAction Stop
 } catch {
-    Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $logFile : $($_.Exception.Message)" | Out-File -FilePath $fallbackLogFile -Append
+    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $logFile : $($_.Exception.Message)"
 }
 
 function Write-Log {
     param($Message, [switch]$Verbose)
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
-    # Write to transcript only
+    # Write to transcript only (via Start-Transcript capturing Write-Output)
     Write-Output $logMessage
-    # Write to console only if Verbose or DebugMode is active
+    # Write to console without transcript capture
     if ($Verbose -or $DebugMode) {
-        Write-Host $logMessage -ForegroundColor Yellow -NoNewline
-        Write-Host # Ensure newline after Write-Host
+        [Console]::WriteLine($logMessage)
     }
-    # Write to file, avoiding transcript capture
+    # Write to file directly
     try {
-        Out-File -FilePath $logFile -InputObject $logMessage -Append -Force -ErrorAction SilentlyContinue
+        Add-Content -Path $logFile -Value $logMessage -ErrorAction SilentlyContinue
     } catch {
-        Out-File -FilePath $fallbackLogFile -InputObject $logMessage -Append -Force
+        Add-Content -Path $fallbackLogFile -Value $logMessage
     }
 }
 
@@ -79,7 +80,7 @@ try {
             if ($updates) {
                 Write-Log "Found $($updates.Count) Windows updates to install." -Verbose
                 Write-Progress -Activity "Installing Windows updates" -Status "Starting..."
-                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-String | Write-Log -Verbose
+                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object { Write-Log $_ -Verbose }
                 $successfullyInstalledUpdates = $true
                 $installSummary += "Installed $($updates.Count) Windows updates"
                 Write-Progress -Activity "Installing Windows updates" -Completed
@@ -144,7 +145,7 @@ try {
             $sourceList = winget source list | Out-String
             if ($sourceList -notmatch "msstore") {
                 Write-Log "Adding msstore source..." -Verbose
-                winget source add --name msstore --arg https://storeedgefd.dsx.mp.microsoft.com | Out-String | Write-Log
+                winget source add --name msstore --arg https://storeedgefd.dsx.mp.microsoft.com | ForEach-Object { Write-Log $_ }
             }
             $storeOutput = winget upgrade --source msstore --accept-source-agreements --accept-package-agreements --silent | Out-String
             Write-Log "winget msstore upgrade output: $storeOutput" -Verbose
@@ -199,7 +200,7 @@ try {
         Write-Log "Critical updates installed. Reboot required." -Verbose
         if ($DebugMode) {
             Write-Log "Debug mode: Skipping automatic reboot prompt for visibility." -Verbose
-            Write-Host "A reboot is required to complete update installation. Please reboot manually." -ForegroundColor Red
+            [Console]::WriteLine("A reboot is required to complete update installation. Please reboot manually.")
         } else {
             Write-Log "Interactive mode: Prompting for reboot confirmation..." -Verbose
             $response = Read-Host "A reboot is required to complete update installation. Reboot now? (Y/N)"
@@ -251,10 +252,10 @@ finally {
     try {
         Stop-Transcript -ErrorAction SilentlyContinue
     } catch {
-        Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)" | Out-File -FilePath $fallbackLogFile -Append
+        Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)"
     }
     if ($DebugMode) {
-        Write-Host "Script execution complete. Press any key to continue..." -ForegroundColor Green
+        [Console]::WriteLine("Script execution complete. Press any key to continue...")
         $null = Read-Host
     }
 }
