@@ -117,12 +117,13 @@ try {
             $lines = $wingetOutput -split "`n"
             foreach ($line in $lines) {
                 $line = $line.Trim()
-                # Adjusted regex to handle variable spacing more precisely
-                if ($line -match "^(.+?)\s{10,}(.+?)\s{10,}(.+?)\s{10,}(.+?)$" -and $matches) {
+                # More flexible regex to handle variable spacing
+                if ($line -match "^(.+?)(?:\s{2,})(.+?)(?:\s{2,})(.+?)(?:\s{2,})(.+?)$" -and $matches) {
                     $name = $matches[1].Trim()
                     $id = $matches[2].Trim()
                     $currentVersion = $matches[3].Trim()
                     $availableVersion = $matches[4].Trim()
+                    Write-Log "Debug: Parsed line - Name: '$name', ID: '$id', Current: '$currentVersion', Available: '$availableVersion'" -Verbose
                     # Ensure the line is not a header, separator, or summary line
                     if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notlike "*---*" -and $line -notmatch "upgrades available" -and $line -notmatch "package\(s\) have version numbers") {
                         $updatesList += [PSCustomObject]@{
