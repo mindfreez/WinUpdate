@@ -117,8 +117,8 @@ try {
             $lines = $wingetOutput -split "`n"
             foreach ($line in $lines) {
                 $line = $line.Trim()
-                # Adjusted regex to match variable spaces more flexibly
-                if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
+                # Adjusted regex to handle variable spacing more precisely
+                if ($line -match "^(.+?)\s{10,}(.+?)\s{10,}(.+?)\s{10,}(.+?)$" -and $matches) {
                     $name = $matches[1].Trim()
                     $id = $matches[2].Trim()
                     $currentVersion = $matches[3].Trim()
