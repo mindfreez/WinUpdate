@@ -97,22 +97,26 @@ try {
         if ($wingetOutput -match "No applicable updates found") {
             Write-Log "No non-Store app updates available." -Verbose
         } else {
-            $updatesList = $wingetOutput -split "`n" | ForEach-Object {
-                $line = $_.Trim()
+            $updatesList = @()
+            $lines = $wingetOutput -split "`n"
+            foreach ($line in $lines) {
+                $line = $line.Trim()
                 if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
                     $name = if ($matches[1]) { $matches[1].Trim() } else { $null }
                     $id = if ($matches[2]) { $matches[2].Trim() } else { $null }
-                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $name -notlike "*---*") {
-                        [PSCustomObject]@{
+                    $currentVersion = if ($matches[3]) { $matches[3].Trim() } else { "Unknown" }
+                    $availableVersion = if ($matches[4]) { $matches[4].Trim() } else { "Unknown" }
+                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notlike "*---*") {
+                        $updatesList += [PSCustomObject]@{
                             Name = $name
                             Id   = $id
-                            CurrentVersion = if ($matches[3]) { $matches[3].Trim() } else { "Unknown" }
-                            AvailableVersion = if ($matches[4]) { $matches[4].Trim() } else { "Unknown" }
+                            CurrentVersion = $currentVersion
+                            AvailableVersion = $availableVersion
                         }
                     }
                 }
-            } | Where-Object { $_ -ne $null }
-            if ($updatesList) {
+            }
+            if ($updatesList.Count -gt 0) {
                 Write-Log "Parsed non-Store app updates:" -Verbose
                 foreach ($update in $updatesList) {
                     Write-Log "Name: $($update.Name), ID: $($update.Id), Current: $($update.CurrentVersion), Available: $($update.AvailableVersion)" -Verbose
