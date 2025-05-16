@@ -101,15 +101,17 @@ try {
             $lines = $wingetOutput -split "`n"
             foreach ($line in $lines) {
                 $line = $line.Trim()
+                # Match lines with at least 4 columns separated by 2+ spaces
                 if ($line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
-                    $name = if ($matches[1]) { $matches[1].Trim() } else { $null }
-                    $id = if ($matches[2]) { $matches[2].Trim() } else { $null }
-                    $currentVersion = if ($matches[3]) { $matches[3].Trim() } else { "Unknown" }
-                    $availableVersion = if ($matches[4]) { $matches[4].Trim() } else { "Unknown" }
+                    $name = $matches[1].Trim()
+                    $id = $matches[2].Trim()
+                    $currentVersion = $matches[3].Trim()
+                    $availableVersion = $matches[4].Trim()
+                    # Ensure the line is not a header or separator
                     if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notlike "*---*") {
                         $updatesList += [PSCustomObject]@{
                             Name = $name
-                            Id   = $id
+                            Id = $id
                             CurrentVersion = $currentVersion
                             AvailableVersion = $availableVersion
                         }
