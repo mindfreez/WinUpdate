@@ -1,4 +1,4 @@
-# System Update Script
+# UpdateSystem.ps1
 # Requires -RunAsAdministrator
 
 param (
@@ -105,10 +105,10 @@ try {
         if ($wingetOutput -match "No applicable updates found") {
             Write-Log "No non-Store app updates available." -Verbose
         } else {
-            $updatesList = $wingetOutput -split "`n" | Select-String -Pattern "^(.+?)\s+([\w\.]+)\s+([\d\.]+)\s+([\d\.]+)" | ForEach-Object {
+            $updatesList = $wingetOutput -split "`n" | Select-String -Pattern "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" | ForEach-Object {
                 $name = $_.Matches.Groups[1].Value.Trim()
                 $id = $_.Matches.Groups[2].Value.Trim()
-                if ($name -notmatch "^Name$" -and $id -notmatch "^Id$") { # Skip header
+                if ($name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $name -notlike "*---*") {
                     [PSCustomObject]@{
                         Name = $name
                         Id   = $id
