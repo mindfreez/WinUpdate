@@ -112,7 +112,11 @@ try {
                     }
                 }
             } | Where-Object { $_ -ne $null }
-            if ($updatesList -and $updatesList.Count -gt 0) {
+            if ($updatesList) {
+                Write-Log "Parsed non-Store app updates:" -Verbose
+                foreach ($update in $updatesList) {
+                    Write-Log "Name: $($update.Name), ID: $($update.Id), Current: $($update.CurrentVersion), Available: $($update.AvailableVersion)" -Verbose
+                }
                 Write-Log "Found $($updatesList.Count) non-Store app updates to install." -Verbose
                 $index = 0
                 foreach ($update in $updatesList) {
@@ -143,11 +147,15 @@ try {
             Write-Log "Opening Microsoft Store for updates..." -Verbose
             Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
             Write-Log "Microsoft Store launched." -Verbose
+            $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
+            if (-not $storeProcess) {
+                Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
+            }
             Start-Sleep -Seconds 120
             try {
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
-                $installSummary += "Completed Microsoft Store app updates"
+                $installSummary += "Completed Microsoft Store app updates via Store UI"
             } catch {
                 Write-Log "Warning: Failed to close Microsoft Store: $($_.Exception.Message)"
             }
