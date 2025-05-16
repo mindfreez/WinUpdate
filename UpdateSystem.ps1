@@ -30,14 +30,18 @@ try {
 function Write-Log {
     param($Message, [switch]$Verbose)
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
+    # Write to transcript only
     Write-Output $logMessage
+    # Write to console only if Verbose or DebugMode is active
     if ($Verbose -or $DebugMode) {
-        Write-Host $logMessage -ForegroundColor Yellow
+        Write-Host $logMessage -ForegroundColor Yellow -NoNewline
+        Write-Host # Ensure newline after Write-Host
     }
+    # Write to file, avoiding transcript capture
     try {
-        $logMessage | Out-File -FilePath $logFile -Append -Force -ErrorAction SilentlyContinue
+        Out-File -FilePath $logFile -InputObject $logMessage -Append -Force -ErrorAction SilentlyContinue
     } catch {
-        $logMessage | Out-File -FilePath $fallbackLogFile -Append -Force
+        Out-File -FilePath $fallbackLogFile -InputObject $logMessage -Append -Force
     }
 }
 
