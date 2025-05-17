@@ -62,7 +62,8 @@ try {
         $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem
         $pcModel = "$($computerSystem.Manufacturer) $($computerSystem.Model)"
         $osName = $osInfo.Caption
-        $osEdition = $osInfo.OSEdition
+        # Fallback for OS edition if OSEdition is not available
+        $osEdition = if ($osInfo.OSEdition) { $osInfo.OSEdition } else { (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID").EditionID }
         $osVersion = $osInfo.Version
         $osBuild = $osInfo.BuildNumber
         Write-Log "PC Model: $pcModel" -Verbose
@@ -82,26 +83,78 @@ try {
         Write-Log "PSWindowsUpdate module ready." -Verbose
     } catch {
         Write-Log "Error: Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
-        $failedUpdates += "Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
+        $failedUpdates += "Failed to install/import module PSWindowsUpdate: $($_.Exception.Message)"
     }
 
     if ($psWindowsUpdateAvailable) {
         Write-Log "Checking for Windows updates (including Defender definitions)..." -Verbose
         try {
             Write-Log "Running Get-WindowsUpdate..." -Verbose
-            $updates = Get-WindowsUpdate -MicrosoftUpdate -AcceptAll -ErrorAction Stop
+            $updates = Get-WindowsUpdate -MicrosoftUpdate -ErrorAction Stop
+
             if ($updates) {
-                Write-Log "Found $($updates.Count) Windows updates to install:" -Verbose
+                # Separate security and non-security updates
+                $securityUpdates = @()
+                $nonSecurityUpdates = @()
                 foreach ($update in $updates) {
-                    Write-Log "Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
+                    $isSecurityUpdate = $false
+                    foreach ($category in $update.Categories) {
+                        if ($category.Name -match "Security Updates" -or $category.Name -match "Definition Updates") {
+                            $isSecurityUpdate = $true
+                            break
+                        }
+                    }
+                    if ($isSecurityUpdate) {
+                        $securityUpdates += $update
+                    } else {
+                        $nonSecurityUpdates += $update
+                    }
                 }
-                Write-Progress -Activity "Installing Windows updates" -Status "Starting..."
-                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object {
-                    Write-Log "Install-WindowsUpdate Output: $_" -Verbose
+
+                # Install security updates automatically
+                if ($securityUpdates) {
+                    Write-Log "Found $($securityUpdates.Count) security updates to install automatically:" -Verbose
+                    foreach ($update in $securityUpdates) {
+                        Write-Log "Security Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
+                    }
+                    Write-Progress -Activity "Installing security updates" -Status "Starting..."
+                    Install-WindowsUpdate -KBArticleID ($securityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object {
+                        Write-Log "Install-WindowsUpdate Output: $_" -Verbose
+                    }
+                    $successfullyInstalledUpdates = $true
+                    $installSummary += "Installed $($securityUpdates.Count) security updates (including Defender definitions)"
+                    Write-Progress -Activity "Installing security updates" -Completed
+                } else {
+                    Write-Log "No security updates to install via PSWindowsUpdate." -Verbose
                 }
-                $successfullyInstalledUpdates = $true
-                $installSummary += "Installed $($updates.Count) Windows updates (including Defender definitions)"
-                Write-Progress -Activity "Installing Windows updates" -Completed
+
+                # Prompt for non-security updates
+                if ($nonSecurityUpdates) {
+                    Write-Log "Found $($nonSecurityUpdates.Count) non-security updates available:" -Verbose
+                    foreach ($update in $nonSecurityUpdates) {
+                        Write-Log "Non-Security Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
+                    }
+                    if ($DebugMode) {
+                        Write-Log "Debug mode: Skipping non-security update prompt. Assuming 'Yes' for installation." -Verbose
+                        $installNonSecurity = 'Y'
+                    } else {
+                        Write-Log "Prompting user for non-security update installation..." -Verbose
+                        $installNonSecurity = Read-Host "Non-security updates are available. Install them now? (Y/N)"
+                    }
+                    if ($installNonSecurity -eq 'Y' -or $installNonSecurity -eq 'y') {
+                        Write-Progress -Activity "Installing non-security updates" -Status "Starting..."
+                        Install-WindowsUpdate -KBArticleID ($nonSecurityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | ForEach-Object {
+                            Write-Log "Install-WindowsUpdate Output: $_" -Verbose
+                        }
+                        $successfullyInstalledUpdates = $true
+                        $installSummary += "Installed $($nonSecurityUpdates.Count) non-security updates"
+                        Write-Progress -Activity "Installing non-security updates" -Completed
+                    } else {
+                        Write-Log "User declined installation of non-security updates." -Verbose
+                    }
+                } else {
+                    Write-Log "No non-security updates to install via PSWindowsUpdate." -Verbose
+                }
             } else {
                 Write-Log "No Windows updates to install via PSWindowsUpdate." -Verbose
             }
@@ -113,7 +166,7 @@ try {
         Write-Log "PSWindowsUpdate unavailable. Skipping Windows updates." -Verbose
     }
 
-    # Explicitly check for Microsoft Defender updates
+    # Explicitly check for Microsoft Defender updates (already classified as security, but ensure it's updated)
     Write-Log "Checking for Microsoft Defender definition updates..." -Verbose
     try {
         # Ensure Defender module is available
@@ -129,13 +182,17 @@ try {
 
     Write-Log "Checking for non-Store app updates via winget..." -Verbose
     try {
+        # Log winget version for debugging
+        $wingetVersion = (winget --version) -replace '^v', ''
+        Write-Log "winget version: $wingetVersion" -Verbose
+
         # Ensure no background winget processes are running
         Write-Log "Checking for existing winget processes..." -Verbose
         $wingetProcess = Get-Process -Name "winget" -ErrorAction SilentlyContinue
         if ($wingetProcess) {
             Write-Log "Found existing winget process (PID: $($wingetProcess.Id)). Terminating..." -Verbose
             Stop-Process -Name "winget" -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 5
         }
 
         $wingetOutput = winget upgrade --source winget --accept-source-agreements | Out-String
@@ -253,13 +310,13 @@ try {
         Write-Log "Warning: Failed to check for pending reboot: $($_.Exception.Message)"
     }
 
-    if ($rebootRequired -and $successfullyInstalledUpdates) {
-        Write-Log "Critical updates installed. Reboot required." -Verbose
+    if ($rebootRequired) {
+        Write-Log "Reboot required to complete update installation." -Verbose
         if ($DebugMode) {
-            Write-Log "Debug mode: Skipping automatic reboot prompt for visibility." -Verbose
+            Write-Log "Debug mode: Skipping reboot prompt for visibility." -Verbose
             [Console]::WriteLine("A reboot is required to complete update installation. Please reboot manually.")
         } else {
-            Write-Log "Interactive mode: Prompting for reboot confirmation..." -Verbose
+            Write-Log "Prompting for reboot confirmation..." -Verbose
             $response = Read-Host "A reboot is required to complete update installation. Reboot now? (Y/N)"
             if ($response -eq 'Y' -or $response -eq 'y') {
                 Write-Log "User confirmed reboot. Rebooting now..." -Verbose
@@ -269,8 +326,6 @@ try {
                 Write-Log "User deferred reboot. Reboot required to complete updates." -Verbose
             }
         }
-    } elseif ($rebootRequired) {
-        Write-Log "Pending reboot detected, but no critical updates installed. Reboot recommended." -Verbose
     } else {
         Write-Log "No reboot required." -Verbose
     }
@@ -312,7 +367,6 @@ finally {
         Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)"
     }
     if ($DebugMode) {
-        [Console]::WriteLine("Script execution complete. Press any key to continue...")
-        $null = Read-Host
+        Write-Log "Debug mode: Script execution complete." -Verbose
     }
 }
