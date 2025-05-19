@@ -1,5 +1,5 @@
 # UpdateSystem.ps1
-# PowerShell script to manage Windows updates, non-Store app updates, and Microsoft Store updates at logon
+# PowerShell script to manage Windows updates, Defender updates, non-Store app updates, and Microsoft Store updates at logon
 # Compatible with Windows 10 (1809+) and Windows 11
 
 # Initialize logging
@@ -82,7 +82,7 @@ if ($nonSecurityUpdates) {
     foreach ($update in $nonSecurityUpdates) {
         Write-Log "Non-Security Update: $($update.Title) ($($update.KBArticleIDs))"
     }
-    Write-Log "Debug mode: Installing non-security updates automatically."
+    Write-Log "Installing non-security updates automatically."
     try {
         $result = Install-WindowsUpdate -AcceptAll -AutoReboot:$false -Verbose -ErrorAction Stop
         Write-Log "Non-Security Update Result: $result"
@@ -155,6 +155,30 @@ if ($wingetVersion) {
     }
 }
 
+# Update Microsoft Store apps
+Write-Log "Attempting to update Microsoft Store apps..."
+try {
+    Write-Log "Opening Microsoft Store for updates..."
+    Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
+    Write-Log "Microsoft Store launched."
+    $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
+    if ($storeProcess) {
+        Write-Log "Microsoft Store process found (PID: $($storeProcess.Id))."
+    } else {
+        Write-Log "Warning: Microsoft Store process not found after launch."
+    }
+    Write-Log "Waiting 120 seconds for Microsoft Store updates to complete..."
+    Start-Sleep -Seconds 120
+    $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
+    if ($storeProcess) {
+        Write-Log "Closing Microsoft Store after update wait..."
+        Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
+    }
+    Write-Log "Microsoft Store app updates completed."
+} catch {
+    Write-Log "Failed to update Microsoft Store apps: $_"
+}
+
 # Check for pending reboot
 Write-Log "Checking for pending reboot..."
 $rebootRequired = $false
@@ -183,6 +207,7 @@ Write-Log "Installation Summary:"
 Write-Log "Installed $($securityUpdates.Count) security updates (including Defender definitions)"
 Write-Log "Installed $($nonSecurityUpdates.Count) non-security updates"
 Write-Log "Updated Microsoft Defender definitions"
+Write-Log "Updated Microsoft Store apps"
 if ($updates) {
     Write-Log "Updated $($updates.Count) non-Store apps via winget"
 } else {
