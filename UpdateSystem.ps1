@@ -195,7 +195,7 @@ try {
             Start-Sleep -Seconds 5
         }
 
-        $wingetOutput = winget upgrade --source winget --accept-source-agreements | Out-String
+        $wingetOutput = winget upgrade --source winget --accept-source-agreements --include-unknown | Out-String
         Write-Log "Raw winget upgrade output: $wingetOutput"
         if ($wingetOutput -match "No installed package found matching input criteria") {
             Write-Log "No non-Store app updates available (winget found no matching packages)." -Verbose
@@ -265,7 +265,31 @@ try {
             } else {
                 Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
             }
-            Start-Sleep -Seconds 120
+
+            # Wait for Store updates with user override
+            $initialWaitSeconds = 300  # 5 minutes
+            Write-Log "Waiting $initialWaitSeconds seconds for Microsoft Store updates to complete..." -Verbose
+            Start-Sleep -Seconds $initialWaitSeconds
+
+            # Check if Store process is still running and prompt user to extend wait
+            $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
+            $extendWait = $false
+            if ($storeProcess) {
+                if ($DebugMode) {
+                    Write-Log "Debug mode: Assuming user wants to extend wait for Microsoft Store updates." -Verbose
+                    $extendWait = $true
+                } else {
+                    Write-Log "Microsoft Store updates may still be in progress." -Verbose
+                    $response = Read-Host "Microsoft Store updates are still running. Extend wait by 5 more minutes? (Y/N)"
+                    $extendWait = ($response -eq 'Y' -or $response -eq 'y')
+                }
+            }
+
+            if ($extendWait) {
+                Write-Log "Extending wait by 300 seconds for Microsoft Store updates..." -Verbose
+                Start-Sleep -Seconds 300
+            }
+
             try {
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
