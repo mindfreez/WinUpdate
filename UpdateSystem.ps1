@@ -179,11 +179,11 @@ try {
     Write-Log "Failed to update Microsoft Store apps: $_"
 }
 
-# Check for pending reboot
+# Check for pending reboot (Line ~186)
 Write-Log "Checking for pending reboot..."
 $rebootRequired = $false
-if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired" -or
-    Test-Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations") {
+if ((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired") -or
+    (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations")) {
     $rebootRequired = $true
     Write-Log "Pending reboot: File rename operations detected."
     Write-Log "Reboot required to complete update installation."
