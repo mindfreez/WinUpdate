@@ -4,15 +4,35 @@
 
 # Initialize logging
 $logDir = "C:\ProgramData\SystemUpdateScript\Logs"
-$logFile = "$logDir\UpdateScript_Transcript_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$logBaseName = "UpdateScript_Transcript_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+$logFile = "$logDir\$logBaseName.log"
+$fallbackLogFile = "$env:TEMP\$logBaseName_fallback.log"
 if (-not (Test-Path $logDir)) { New-Item -Path $logDir -ItemType Directory -Force | Out-Null }
-Start-Transcript -Path $logFile -Append -ErrorAction SilentlyContinue
+
+# Ensure unique log file to avoid conflicts
+$logCounter = 0
+while (Test-Path $logFile -and $logCounter -lt 10) {
+    $logCounter++
+    $logFile = "$logDir\$logBaseName_$logCounter.log"
+}
+try {
+    Start-Transcript -Path $logFile -Append -ErrorAction Stop
+} catch {
+    Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Failed to start transcript for $logFile: $_" | Out-File $fallbackLogFile -Append
+}
 
 # Function to write log messages
 function Write-Log {
     param ($Message)
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-Output "$timestamp : $Message" | Out-File $logFile -Append
+    $logMessage = "$timestamp : $Message"
+    Write-Output $logMessage
+    try {
+        $logMessage | Out-File $logFile -Append -ErrorAction Stop
+    } catch {
+        $logMessage | Out-File $fallbackLogFile -Append
+        Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log write failed for $logFile: $_" | Out-File $fallbackLogFile -Append
+    }
 }
 
 Write-Log "Detecting system information..."
@@ -179,7 +199,7 @@ try {
     Write-Log "Failed to update Microsoft Store apps: $_"
 }
 
-# Check for pending reboot (Line ~186)
+# Check for pending reboot
 Write-Log "Checking for pending reboot..."
 $rebootRequired = $false
 if ((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired") -or
@@ -220,4 +240,8 @@ if ($rebootRequired) {
 }
 
 Write-Log "Script completed."
-Stop-Transcript
+try {
+    Stop-Transcript -ErrorAction SilentlyContinue
+} catch {
+    Write-Output "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Failed to stop transcript: $_" | Out-File $fallbackLogFile -Append
+}
