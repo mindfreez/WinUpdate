@@ -166,10 +166,9 @@ try {
         Write-Log "PSWindowsUpdate unavailable. Skipping Windows updates." -Verbose
     }
 
-    # Explicitly check for Microsoft Defender updates (already classified as security, but ensure it's updated)
+    # Explicitly check for Microsoft Defender updates
     Write-Log "Checking for Microsoft Defender definition updates..." -Verbose
     try {
-        # Ensure Defender module is available
         Import-Module -Name Defender -ErrorAction Stop
         Write-Log "Running Update-MpSignature to update Defender definitions..." -Verbose
         Update-MpSignature -ErrorAction Stop
@@ -180,11 +179,17 @@ try {
         $failedUpdates += "Failed to update Microsoft Defender definitions: $($_.Exception.Message)"
     }
 
+    # Check for non-Store app updates via winget
     Write-Log "Checking for non-Store app updates via winget..." -Verbose
     try {
         # Log winget version for debugging
         $wingetVersion = (winget --version) -replace '^v', ''
         Write-Log "winget version: $wingetVersion" -Verbose
+
+        # Check winget version for compatibility
+        if ($wingetVersion -lt "1.2") {
+            Write-Log "Warning: winget version $wingetVersion may lack features required for reliable updates. Consider updating winget." -Verbose
+        }
 
         # Ensure no background winget processes are running
         Write-Log "Checking for existing winget processes..." -Verbose
@@ -195,26 +200,39 @@ try {
             Start-Sleep -Seconds 5
         }
 
+        # Run winget upgrade
+        Write-Log "Running winget upgrade..." -Verbose
         $wingetOutput = winget upgrade --source winget --accept-source-agreements --include-unknown | Out-String
-        Write-Log "Raw winget upgrade output: $wingetOutput"
-        if ($wingetOutput -match "No installed package found matching input criteria") {
-            Write-Log "No non-Store app updates available (winget found no matching packages)." -Verbose
-        } elseif ($wingetOutput -match "No applicable updates found") {
+        $wingetLogFile = "$logDir\winget_raw_output_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        Add-Content -Path $wingetLogFile -Value $wingetOutput -ErrorAction SilentlyContinue
+        Write-Log "Raw winget output saved to: $wingetLogFile" -Verbose
+
+        if ($wingetOutput -match "No installed package found matching input criteria" -or $wingetOutput -match "No applicable updates found") {
             Write-Log "No non-Store app updates available." -Verbose
         } else {
             $updatesList = @()
             $lines = $wingetOutput -split "`n"
+            $parsingUpdates = $false
             foreach ($line in $lines) {
                 $line = $line.Trim()
-                # More flexible regex to handle variable spacing
-                if ($line -match "^(.+?)(?:\s{2,})(.+?)(?:\s{2,})(.+?)(?:\s{2,})(.+?)$" -and $matches) {
+                # Skip progress bars, empty lines, or non-update lines
+                if ($line -match "^[\sΓûêΓûÆ-]+" -or $line -eq "" -or $line -like "*KB / *" -or $line -like "*%") {
+                    continue
+                }
+                # Detect start of updates table (after header separator)
+                if ($line -like "*---*") {
+                    $parsingUpdates = $true
+                    continue
+                }
+                # Parse update lines after header
+                if ($parsingUpdates -and $line -match "^(.+?)\s{2,}(.+?)\s{2,}(.+?)\s{2,}(.+?)$" -and $matches) {
                     $name = $matches[1].Trim()
                     $id = $matches[2].Trim()
                     $currentVersion = $matches[3].Trim()
                     $availableVersion = $matches[4].Trim()
                     Write-Log "Debug: Parsed line - Name: '$name', ID: '$id', Current: '$currentVersion', Available: '$availableVersion'" -Verbose
-                    # Ensure the line is not a header, separator, or summary line
-                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notlike "*---*" -and $line -notmatch "upgrades available" -and $line -notmatch "package\(s\) have version numbers") {
+                    # Skip header or invalid lines
+                    if ($name -and $id -and $name -notmatch "^Name$" -and $id -notmatch "^Id$" -and $id -match "^[\w\.]+" -and $line -notmatch "upgrades available" -and $line -notmatch "package\(s\) have version numbers") {
                         $updatesList += [PSCustomObject]@{
                             Name = $name
                             Id = $id
@@ -225,21 +243,32 @@ try {
                 }
             }
             if ($updatesList.Count -gt 0) {
-                Write-Log "Parsed non-Store app updates:" -Verbose
+                Write-Log "Found $($updatesList.Count) non-Store app updates to install:" -Verbose
                 foreach ($update in $updatesList) {
                     Write-Log "Name: $($update.Name), ID: $($update.Id), Current: $($update.CurrentVersion), Available: $($update.AvailableVersion)" -Verbose
                 }
-                Write-Log "Found $($updatesList.Count) non-Store app updates to install." -Verbose
                 $index = 0
                 foreach ($update in $updatesList) {
-                    Write-Progress -Activity "Installing non-Store app updates" -Status "Update $index of $($updatesList.Count)" -PercentComplete (($index / $updatesList.Count) * 100)
-                    try {
-                        $installOutput = winget upgrade --id $update.Id --source winget --accept-source-agreements --accept-package-agreements --exact --force --silent | Out-String
-                        Write-Log "Installed $($update.Name) ($($update.Id)): $installOutput" -Verbose
-                        $installSummary += "Installed non-Store update: $($update.Name) ($($update.Id))"
-                    } catch {
-                        Write-Log "Warning: Failed to install $($update.Name) ($($update.Id)): $($_.Exception.Message)"
-                        $failedUpdates += "Failed non-Store update $($update.Id): $($_.Exception.Message)"
+                    Write-Progress -Activity "Installing non-Store app updates" -Status "Update $index of $($updatesList.Count) ($($update.Name))" -PercentComplete (($index / $updatesList.Count) * 100)
+                    $retryCount = 0
+                    $maxRetries = 2
+                    $success = $false
+                    while ($retryCount -lt $maxRetries -and -not $success) {
+                        try {
+                            Write-Log "Attempting to install $($update.Name) ($($update.Id))..." -Verbose
+                            $installOutput = winget upgrade --id $update.Id --source winget --accept-source-agreements --accept-package-agreements --exact --force --silent --timeout 300 | Out-String
+                            Write-Log "Installed $($update.Name) ($($update.Id)): $installOutput" -Verbose
+                            $installSummary += "Installed non-Store update: $($update.Name) ($($update.Id))"
+                            $success = $true
+                        } catch {
+                            $retryCount++
+                            Write-Log "Warning: Failed to install $($update.Name) ($($update.Id)) (Attempt $retryCount/$maxRetries): $($_.Exception.Message)" -Verbose
+                            if ($retryCount -eq $maxRetries) {
+                                Write-Log "Error: Max retries reached for $($update.Name) ($($update.Id))." -Verbose
+                                $failedUpdates += "Failed non-Store update $($update.Id): $($_.Exception.Message)"
+                            }
+                            Start-Sleep -Seconds 5
+                        }
                     }
                     $index++
                 }
@@ -249,10 +278,27 @@ try {
             }
         }
     } catch {
-        Write-Log "Warning: Failed to process non-Store app updates: $($_.Exception.Message)"
+        Write-Log "Warning: Failed to process non-Store app updates: $($_.Exception.Message)" -Verbose
         $failedUpdates += "Failed non-Store app updates: $($_.Exception.Message)"
     }
 
+    # Firefox fallback if winget update fails
+    if ($failedUpdates -match "Mozilla.Firefox") {
+        Write-Log "Attempting Firefox internal updater as fallback..." -Verbose
+        try {
+            $firefoxPath = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe" -ErrorAction SilentlyContinue)."(default)"
+            if ($firefoxPath) {
+                Start-Process -FilePath $firefoxPath -ArgumentList "--check-for-update" -ErrorAction Stop
+                Write-Log "Launched Firefox internal updater." -Verbose
+            } else {
+                Write-Log "Warning: Firefox executable not found for fallback update." -Verbose
+            }
+        } catch {
+            Write-Log "Warning: Failed to launch Firefox updater: $($_.Exception.Message)" -Verbose
+        }
+    }
+
+    # Update Microsoft Store apps
     if (-not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
         Write-Log "Attempting to update Microsoft Store apps..." -Verbose
         try {
@@ -266,36 +312,30 @@ try {
                 Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
             }
 
-            # Wait for Store updates with user override
-            $initialWaitSeconds = 300  # 5 minutes
-            Write-Log "Waiting $initialWaitSeconds seconds for Microsoft Store updates to complete..." -Verbose
-            Start-Sleep -Seconds $initialWaitSeconds
-
-            # Check if Store process is still running and prompt user to extend wait
-            $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
-            $extendWait = $false
-            if ($storeProcess) {
-                if ($DebugMode) {
+            $waitSeconds = 300  # 5 minutes
+            if (-not $DebugMode) {
+                Write-Log "Waiting $waitSeconds seconds for Microsoft Store updates (non-Debug mode)..." -Verbose
+                Start-Sleep -Seconds $waitSeconds
+                Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
+                Write-Log "Microsoft Store closed after fixed wait." -Verbose
+                $installSummary += "Completed Microsoft Store app updates via Store UI"
+            } else {
+                # Debug mode: Allow extended wait with user prompt
+                Write-Log "Waiting $waitSeconds seconds for Microsoft Store updates to complete..." -Verbose
+                Start-Sleep -Seconds $waitSeconds
+                $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
+                $extendWait = $false
+                if ($storeProcess) {
                     Write-Log "Debug mode: Assuming user wants to extend wait for Microsoft Store updates." -Verbose
                     $extendWait = $true
-                } else {
-                    Write-Log "Microsoft Store updates may still be in progress." -Verbose
-                    $response = Read-Host "Microsoft Store updates are still running. Extend wait by 5 more minutes? (Y/N)"
-                    $extendWait = ($response -eq 'Y' -or $response -eq 'y')
                 }
-            }
-
-            if ($extendWait) {
-                Write-Log "Extending wait by 300 seconds for Microsoft Store updates..." -Verbose
-                Start-Sleep -Seconds 300
-            }
-
-            try {
+                if ($extendWait) {
+                    Write-Log "Extending wait by 300 seconds for Microsoft Store updates..." -Verbose
+                    Start-Sleep -Seconds 300
+                }
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
                 $installSummary += "Completed Microsoft Store app updates via Store UI"
-            } catch {
-                Write-Log "Warning: Failed to close Microsoft Store: $($_.Exception.Message)"
             }
         } catch {
             Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message). Leaving Store open." -Verbose
@@ -306,6 +346,7 @@ try {
         Write-Log "Skipping Microsoft Store updates due to critical PSWindowsUpdate failure." -Verbose
     }
 
+    # Check for pending reboot
     Write-Log "Checking for pending reboot..." -Verbose
     $rebootRequired = $false
     try {
@@ -354,6 +395,7 @@ try {
         Write-Log "No reboot required." -Verbose
     }
 
+    # Clean up old logs
     Write-Log "Cleaning up old logs..." -Verbose
     try {
         Get-ChildItem -Path $logDir -Filter "UpdateScript_Transcript_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -ErrorAction SilentlyContinue
