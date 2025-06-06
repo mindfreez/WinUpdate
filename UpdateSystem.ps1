@@ -45,7 +45,7 @@ function Write-Log {
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
     Add-Content -Path $logFile -Value $logMessage -ErrorAction SilentlyContinue
     if ($Verbose -or $DebugMode) {
-        Write-Output $logMessage  # Console output only in DebugMode or with Verbose
+        Write-Output $logMessage
     }
     if (-not $Verbose -and -not $DebugMode) {
         Add-Content -Path $fallbackLogFile -Value $logMessage -ErrorAction SilentlyContinue
@@ -77,7 +77,7 @@ if ($currentPSVersion -lt 7) {
             $scriptPath = $MyInvocation.MyCommand.Path
             $args = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
             if ($DebugMode) { $args += " -DebugMode" }
-            Start-Process -FilePath $pwshPath -ArgumentList $args -Wait
+            Start-Process -FilePath $pwshPath -ArgumentList $args -Wait -NoNewWindow
             Write-Log "Script relaunched in PowerShell 7.x." -Verbose
             exit 0
         } catch {
@@ -184,7 +184,7 @@ try {
                             Write-Log "Security Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
                         }
                         Write-Progress -Activity "Installing security updates" -Status "Starting..."
-                        Install-WindowsUpdate -KBArticleID ($securityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -Quiet -ErrorAction Stop | Out-Null
+                        Install-WindowsUpdate -KBArticleID ($securityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-Null
                         $successfullyInstalledUpdates = $true
                         $installSummary += "Installed $($securityUpdates.Count) security updates (including Defender definitions)"
                         Write-Progress -Activity "Installing security updates" -Completed
@@ -192,16 +192,16 @@ try {
                         Write-Log "No security updates to install via PSWindowsUpdate." -Verbose
                     }
 
-                    # Install non-security updates (auto in DebugMode or non-interactive)
+                    # Install non-security updates
                     if ($nonSecurityUpdates) {
                         Write-Log "Found $($nonSecurityUpdates.Count) non-security updates available:" -Verbose
                         foreach ($update in $nonSecurityUpdates) {
                             Write-Log "Non-Security Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
                         }
-                        $installNonSecurity = if ($DebugMode -or -not [Console]::IsInputRedirected) { 'Y' } else { Read-Host "Non-security updates are available. Install them now? (Y/N)" }
+                        $installNonSecurity = if ($DebugMode -or [Console]::IsInputRedirected) { 'Y' } else { Read-Host "Non-security updates are available. Install them now? (Y/N)" }
                         if ($installNonSecurity -eq 'Y' -or $installNonSecurity -eq 'y') {
                             Write-Progress -Activity "Installing non-security updates" -Status "Starting..."
-                            Install-WindowsUpdate -KBArticleID ($nonSecurityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -Quiet -ErrorAction Stop | Out-Null
+                            Install-WindowsUpdate -KBArticleID ($nonSecurityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-Null
                             $successfullyInstalledUpdates = $true
                             $installSummary += "Installed $($nonSecurityUpdates.Count) non-security updates"
                             Write-Progress -Activity "Installing non-security updates" -Completed
@@ -230,7 +230,7 @@ try {
     # Check for Microsoft Defender updates
     Write-Log "Checking for Microsoft Defender definition updates..." -Verbose
     try {
-        Import-Module -Name Defender -ErrorAction Stop
+        Import-Module -Name Defender -SkipEditionCheck -ErrorAction Stop
         Write-Log "Running Update-MpSignature..." -Verbose
         Update-MpSignature -ErrorAction Stop
         Write-Log "Microsoft Defender definitions updated successfully." -Verbose
@@ -246,7 +246,7 @@ try {
         Write-Log "Attempting to update Microsoft Store apps..." -Verbose
         try {
             Write-Log "Opening Microsoft Store for updates..." -Verbose
-            Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
+            Start-Process "ms-windows-store://downloadsandupdates" -NoNewWindow -ErrorAction Stop
             Write-Log "Microsoft Store launched." -Verbose
             $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
             if ($storeProcess) {
@@ -255,7 +255,7 @@ try {
                 Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
             }
 
-            $waitSeconds = 300
+            $waitSeconds = 180  # Reduced timeout for Task Scheduler
             if (-not $DebugMode -and -not [Console]::IsInputRedirected) {
                 Write-Log "Waiting $waitSeconds seconds for Microsoft Store updates..." -Verbose
                 Start-Sleep -Seconds $waitSeconds
@@ -267,8 +267,8 @@ try {
                 Start-Sleep -Seconds $waitSeconds
                 $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
                 if ($storeProcess) {
-                    Write-Log "Extending wait by 300 seconds for Microsoft Store updates..." -Verbose
-                    Start-Sleep -Seconds 300
+                    Write-Log "Extending wait by 180 seconds for Microsoft Store updates..." -Verbose
+                    Start-Sleep -Seconds 180
                 }
                 Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
                 Write-Log "Microsoft Store closed after update wait." -Verbose
@@ -278,7 +278,7 @@ try {
             Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message). Leaving Store open." -Verbose
             $failedUpdates += "Failed to update Microsoft Store apps: $($_.Exception.Message)"
             Write-Error "Failed to update Microsoft Store apps: $_"
-            Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction SilentlyContinue
+            Start-Process "ms-windows-store://downloadsandupdates" -NoNewWindow -ErrorAction SilentlyContinue
         }
     } else {
         Write-Log "Skipping Microsoft Store updates due to PSWindowsUpdate failure." -Verbose
