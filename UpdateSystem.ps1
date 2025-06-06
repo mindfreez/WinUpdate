@@ -1,11 +1,11 @@
-# LocalUpdateSystem.ps1
+# UpdateSystem.ps1
 # Purpose: Automate Windows Update, Defender definitions, and Microsoft Store updates with logging and reboot handling
 # Compatibility: Windows 10 and Windows 11
 # Requires: Administrative privileges; automatically installs PSWindowsUpdate if needed
 # Notes: Prefers PowerShell 7.x if available; minimizes console output to prevent duplicates
 
 param (
-    [bool]$DebugMode = $true
+    [switch]$DebugMode
 )
 
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
@@ -75,7 +75,9 @@ if ($currentPSVersion -lt 7) {
         Write-Log "PowerShell 7.x found at $pwshPath. Relaunching script in PowerShell 7.x..." -Verbose
         try {
             $scriptPath = $MyInvocation.MyCommand.Path
-            Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -DebugMode:$DebugMode" -Wait
+            $args = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+            if ($DebugMode) { $args += " -DebugMode" }
+            Start-Process -FilePath $pwshPath -ArgumentList $args -Wait
             Write-Log "Script relaunched in PowerShell 7.x." -Verbose
             exit 0
         } catch {
@@ -144,6 +146,7 @@ try {
         Write-Log "Error: Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
         $failedUpdates += "Failed to install/import module PSWindowsUpdate: $($_.Exception.Message)"
         Write-Error "Failed to install/import PSWindowsUpdate module: $_"
+        exit 1
     }
 
     if ($psWindowsUpdateAvailable) {
