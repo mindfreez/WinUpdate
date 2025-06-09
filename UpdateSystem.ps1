@@ -110,7 +110,7 @@ if ($currentPSVersion -lt 7) {
         } catch {
             Write-Log "Error relaunching in PowerShell 7.x: $($_.Exception.Message)" -Verbose
             Write-Error "Error relaunching in PowerShell 7.x: $_"
-            Write-Log "Falling back to Windows PowerShell $currentPSVersion." -Verbose
+            Write-Log "Falling back to PowerShell $currentPSVersion." -Verbose
         } finally {
             # Clean up temporary script
             if (Test-Path $tempScriptPath) {
@@ -119,7 +119,7 @@ if ($currentPSVersion -lt 7) {
             }
         }
     } else {
-        Write-Log "PowerShell 7.x not found. Continuing with Windows PowerShell $currentPSVersion." -Verbose
+        Write-Log "PowerShell 7.x not found. Continuing with PowerShell $currentPSVersion." -Verbose
     }
 } else {
     Write-Log "Running in PowerShell $currentPSVersion. No relaunch needed." -Verbose
@@ -386,7 +386,9 @@ try {
             Write-Log "Non-interactive or debug mode: Skipping reboot prompt." -Verbose
             Write-Output "A reboot is required to complete update installation. Please reboot manually."
             try {
-                $toast = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+                # Load Windows Runtime assemblies for toast notifications
+                Add-Type -AssemblyName System.Runtime.WindowsRuntime
+                $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
                 $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
                 $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
                 $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("System Update")) | Out-Null
@@ -395,7 +397,15 @@ try {
                 $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($xml))
                 Write-Log "Sent toast notification for pending reboot." -Verbose
             } catch {
-                Write-Log "Warning: Failed to send toast notification: $($_.Exception.Message)"
+                Write-Log "Warning: Failed to send toast notification: $($_.Exception.Message)" -Verbose
+                try {
+                    # Fallback to System.Windows.Forms.MessageBox
+                    Add-Type -AssemblyName System.Windows.Forms
+                    [System.Windows.Forms.MessageBox]::Show("A reboot is required to complete updates. Please reboot soon.", "System Update", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                    Write-Log "Sent fallback message box for pending reboot." -Verbose
+                } catch {
+                    Write-Log "Warning: Failed to send fallback message box: $($_.Exception.Message)" -Verbose
+                }
             }
         } else {
             Write-Log "Prompting for reboot confirmation..." -Verbose
