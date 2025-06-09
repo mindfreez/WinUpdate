@@ -37,6 +37,7 @@ try {
 # Start transcript
 try {
     Start-Transcript -Path $LogFile -Append -Force -ErrorAction Stop
+    Write-Log "Transcript started successfully." -Verbose
 } catch {
     Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $LogFile : $($_.Exception.Message)"
     Write-Error "Failed to start transcript: $_"
@@ -49,7 +50,11 @@ function Write-Log {
         [switch]$Verbose
     )
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
-    Add-Content -Path $LogFile -Value $logMessage -ErrorAction SilentlyContinue
+    try {
+        Add-Content -Path $LogFile -Value $logMessage -ErrorAction Stop
+    } catch {
+        Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error writing to main log: $($_.Exception.Message)"
+    }
     if ($Verbose -or $DebugMode) {
         Write-Output $logMessage
     }
@@ -392,7 +397,7 @@ try {
             try {
                 # Load Windows Runtime assemblies for toast notifications
                 Add-Type -AssemblyName System.Runtime.WindowsRuntime
-                [WindowsRuntimeLoader.RuntimeLoader]::Load("Windows.UI.Notifications")
+                $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
                 $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
                 $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
                 $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("System Update")) | Out-Null
@@ -467,6 +472,7 @@ catch {
 finally {
     try {
         Stop-Transcript -ErrorAction SilentlyContinue
+        Write-Log "Transcript stopped successfully." -Verbose
     } catch {
         Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)"
     }
