@@ -54,6 +54,44 @@ function Stop-LockingProcesses {
     }
 }
 
+# Function to clean Windows Update cache
+function Clear-WindowsUpdateCache {
+    Write-Log "Clearing Windows Update cache..." -Verbose
+    try {
+        Stop-Service -Name wuauserv -Force -ErrorAction Stop
+        Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\Download\*" -Recurse -Force -ErrorAction Stop
+        Start-Service -Name wuauserv -ErrorAction Stop
+        Write-Log "Windows Update cache cleared successfully." -Verbose
+    } catch {
+        Write-Log "Warning: Failed to clear Windows Update cache: $($_.Exception.Message)"
+        $failedUpdates += "Failed to clear Windows Update cache: $($_.Exception.Message)"
+    }
+}
+
+# Function to check disk space
+function Test-DiskSpace {
+    param (
+        [string]$Drive = "C:",
+        [int]$MinFreeGB = 10
+    )
+    Write-Log "Checking disk space on $Drive..." -Verbose
+    try {
+        $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$Drive'"
+        $freeSpaceGB = [math]::Round($disk.FreeSpace / 1GB, 2)
+        Write-Log "Free disk space: $freeSpaceGB GB" -Verbose
+        if ($freeSpaceGB -lt $MinFreeGB) {
+            Write-Log "Error: Insufficient disk space ($freeSpaceGB GB free, $MinFreeGB GB required)." -Verbose
+            throw "Insufficient disk space for updates."
+        }
+        Write-Log "Sufficient disk space available." -Verbose
+        return $true
+    } catch {
+        Write-Log "Error checking disk space: $($_.Exception.Message)"
+        $failedUpdates += "Failed to check disk space: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # Ensure log directory exists
 try {
     if (-not (Test-Path $logDir)) {
@@ -159,6 +197,15 @@ try {
         Write-Log "Warning: Failed to detect system information: $($_.Exception.Message)" -Verbose
     }
 
+    # Check disk space
+    if (-not (Test-DiskSpace -Drive "C:" -MinFreeGB 10)) {
+        Write-Log "Error: Stopping due to insufficient disk space." -Verbose
+        exit 1
+    }
+
+    # Clear Windows Update cache
+    Clear-WindowsUpdateCache
+
     # Check internet connectivity with retries
     Write-Log "Checking internet connectivity..." -Verbose
     $networkRetries = 3
@@ -215,15 +262,22 @@ try {
                 if ($updates) {
                     $securityUpdates = @()
                     $nonSecurityUpdates = @()
+                    $featureUpdates = @()
                     foreach ($update in $updates) {
                         $isSecurityUpdate = $false
+                        $isFeatureUpdate = $false
                         foreach ($category in $update.Categories) {
                             if ($category.Name -match "Security Updates" -or $category.Name -match "Definition Updates") {
                                 $isSecurityUpdate = $true
                                 break
                             }
+                            if ($category.Name -match "Feature Packs" -or $update.Title -match "version 24H2") {
+                                $isFeatureUpdate = $true
+                            }
                         }
-                        if ($isSecurityUpdate) {
+                        if ($isFeatureUpdate) {
+                            $featureUpdates += $update
+                        } elseif ($isSecurityUpdate) {
                             $securityUpdates += $update
                         } else {
                             $nonSecurityUpdates += $update
@@ -237,12 +291,45 @@ try {
                             Write-Log "Security Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
                         }
                         Write-Progress -Activity "Installing security updates" -Status "Starting..."
-                        Install-WindowsUpdate -KBArticleID ($securityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-Null
+                        Install-WindowsUpdate -KBArticleID ($securityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop -Verbose | Out-Null
                         $successfullyInstalledUpdates = $true
                         $installSummary += "Installed $($securityUpdates.Count) security updates (including Defender definitions)"
                         Write-Progress -Activity "Installing security updates" -Completed
                     } else {
                         Write-Log "No security updates to install via PSWindowsUpdate." -Verbose
+                    }
+
+                    # Install feature updates
+                    if ($featureUpdates) {
+                        Write-Log "Found $($featureUpdates.Count) feature updates to install automatically:" -Verbose
+                        foreach ($update in $featureUpdates) {
+                            Write-Log "Feature Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
+                        }
+                        Write-Progress -Activity "Installing feature updates" -Status "Starting..."
+                        try {
+                            Install-WindowsUpdate -KBArticleID ($featureUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop -Verbose | Out-Null
+                            $successfullyInstalledUpdates = $true
+                            $installSummary += "Installed $($featureUpdates.Count) feature updates"
+                        } catch {
+                            Write-Log "Error: Failed to install feature updates via PSWindowsUpdate: $($_.Exception.Message)" -Verbose
+                            $failedUpdates += "Failed feature updates: $($_.Exception.Message)"
+                            Write-Log "Falling back to Windows Update Assistant for feature updates..." -Verbose
+                            try {
+                                $assistantUrl = "https://go.microsoft.com/fwlink/?LinkID=799445"
+                                $assistantPath = "$env:TEMP\WindowsUpdateAssistant.exe"
+                                Invoke-WebRequest -Uri $assistantUrl -OutFile $assistantPath -ErrorAction Stop
+                                Start-Process -FilePath $assistantPath -ArgumentList "/quietinstall /skipeula /auto upgrade" -Wait -ErrorAction Stop
+                                Write-Log "Windows Update Assistant executed successfully." -Verbose
+                                $installSummary += "Attempted feature update via Windows Update Assistant"
+                                $successfullyInstalledUpdates = $true
+                            } catch {
+                                Write-Log "Error: Failed to run Windows Update Assistant: $($_.Exception.Message)" -Verbose
+                                $failedUpdates += "Failed Windows Update Assistant: $($_.Exception.Message)"
+                            }
+                        }
+                        Write-Progress -Activity "Installing feature updates" -Completed
+                    } else {
+                        Write-Log "No feature updates to install via PSWindowsUpdate." -Verbose
                     }
 
                     # Install non-security updates
@@ -254,7 +341,7 @@ try {
                         $installNonSecurity = if ($NonInteractive -or $DebugMode -or [Console]::IsInputRedirected) { 'Y' } else { Read-Host "Non-security updates are available. Install them now? (Y/N)" }
                         if ($installNonSecurity -eq 'Y' -or $installNonSecurity -eq 'y') {
                             Write-Progress -Activity "Installing non-security updates" -Status "Starting..."
-                            Install-WindowsUpdate -KBArticleID ($nonSecurityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-Null
+                            Install-WindowsUpdate -KBArticleID ($nonSecurityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop -Verbose | Out-Null
                             $successfullyInstalledUpdates = $true
                             $installSummary += "Installed $($nonSecurityUpdates.Count) non-security updates"
                             Write-Progress -Activity "Installing non-security updates" -Completed
