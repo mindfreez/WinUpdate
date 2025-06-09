@@ -81,19 +81,39 @@ Write-Log "Current PowerShell version: $currentPSVersion" -Verbose
 if ($currentPSVersion -lt 7) {
     $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
     if ($pwshPath) {
-        Write-Log "PowerShell 7.x found at $pwshPath. Relaunching script in PowerShell 7.x..." -Verbose
+        Write-Log "PowerShell 7.x found at $pwshPath. Preparing to relaunch script in PowerShell 7.x..." -Verbose
         try {
-            $scriptPath = $MyInvocation.MyCommand.Path
-            $args = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+            # Save the script to a temporary file to ensure $MyInvocation.MyCommand.Path works
+            $tempScriptPath = "$env:TEMP\UpdateSystem_$(Get-Date -Format 'yyyyMMdd_HHmmss').ps1"
+            $currentScriptContent = Get-Content -Path $MyInvocation.MyCommand.Path -Raw -ErrorAction Stop
+            Set-Content -Path $tempScriptPath -Value $currentScriptContent -ErrorAction Stop
+            Write-Log "Saved script to temporary file: $tempScriptPath" -Verbose
+
+            # Build arguments for relaunch
+            $args = "-NoProfile -ExecutionPolicy Bypass -File `"$tempScriptPath`""
             if ($DebugMode) { $args += " -DebugMode" }
             if ($NonInteractive) { $args += " -NonInteractive" }
             $args += " -StoreUpdateTimeout $StoreUpdateTimeout"
-            Start-Process -FilePath $pwshPath -ArgumentList $args -Wait -NoNewWindow
-            Write-Log "Script relaunched in PowerShell 7.x." -Verbose
-            exit 0
+
+            Write-Log "Relaunching with command: $pwshPath $args" -Verbose
+            $process = Start-Process -FilePath $pwshPath -ArgumentList $args -Wait -PassThru -ErrorAction Stop
+            Write-Log "PowerShell 7.x process exited with code: $($process.ExitCode)" -Verbose
+
+            # Clean up temporary script
+            Remove-Item -Path $tempScriptPath -Force -ErrorAction SilentlyContinue
+
+            if ($process.ExitCode -eq 0) {
+                Write-Log "Script successfully relaunched in PowerShell 7.x." -Verbose
+                exit 0
+            } else {
+                Write-Log "Error: PowerShell 7.x relaunch failed with exit code: $($process.ExitCode)" -Verbose
+                throw "PowerShell 7.x relaunch failed."
+            }
         } catch {
-            Write-Log "Error relaunching in PowerShell 7.x: $_" -Verbose
+            Write-Log "Error relaunching in PowerShell 7.x: $($_.Exception.Message)" -Verbose
             Write-Error "Error relaunching in PowerShell 7.x: $_"
+            Write-Log "Falling back to Windows PowerShell $currentPSVersion." -Verbose
+            # Continue execution in Windows PowerShell
         }
     } else {
         Write-Log "PowerShell 7.x not found. Continuing with Windows PowerShell $currentPSVersion." -Verbose
@@ -179,7 +199,6 @@ try {
             try {
                 Write-Log "Running Get-WindowsUpdate..." -Verbose
                 $updates = Get-WindowsUpdate -MicrosoftUpdate -ErrorAction Stop | Where-Object { $_.IsHidden -eq $false }
-
                 if ($updates) {
                     $securityUpdates = @()
                     $nonSecurityUpdates = @()
@@ -207,7 +226,7 @@ try {
                         Write-Progress -Activity "Installing security updates" -Status "Starting..."
                         Install-WindowsUpdate -KBArticleID ($securityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-Null
                         $successfullyInstalledUpdates = $true
-                        $installSummary += "Installed $($securityUpdates.Count) security updates (including Defender definitions)"
+                        $installSummary += "Installed $($securityUpdates.Count) security updates."
                         Write-Progress -Activity "Installing security updates" -Completed
                     } else {
                         Write-Log "No security updates to install via PSWindowsUpdate." -Verbose
@@ -238,7 +257,7 @@ try {
                 }
             } catch {
                 Write-Log "Error: Failed to install Windows updates: $($_.Exception.Message)"
-                $failedUpdates += "Failed Windows updates: $($_.Exception.Message)"
+                $failedUpdates += "Failed to install Windows updates: $($_.Exception.Message)"
                 Write-Error "Failed to install Windows updates: $_"
             }
             $attempt++
@@ -249,25 +268,24 @@ try {
         try {
             $updateSession = New-Object -ComObject Microsoft.Update.Session
             $updateSearcher = $updateSession.CreateUpdateSearcher()
-            $searchResult = $updateSearcher.Search("IsInstalled=0")
+            $searchResult = $updateSearcher.Search("IsPublished=0")
             if ($searchResult.Updates.Count -gt 0) {
                 Write-Log "Found $($searchResult.Updates.Count) updates via COM." -Verbose
                 $installer = $updateSession.CreateUpdateInstaller()
                 $installer.Updates = $searchResult.Updates
                 $installResult = $installer.Install()
                 Write-Log "COM-based update installation completed." -Verbose
-                $installSummary += "Installed updates via COM-based Windows Update"
+                $installSummary += "Installed updates via COM-based WindowsUpdate"
                 $successfullyInstalledUpdates = $true
             } else {
                 Write-Log "No updates found via COM-based Windows Update." -Verbose
             }
         } catch {
             Write-Log "Error: COM-based update failed: $($_.Exception.Message)"
-            $failedUpdates += "COM-based update failed: $($_.Exception.Message)"
+            $failedUpdates += "Failed COM-based update failed: $($_.Exception.Message)"
             Write-Error "COM-based update failed: $_"
         }
     }
-
     # Check for Microsoft Defender updates
     Write-Log "Checking for Microsoft Defender definition updates..." -Verbose
     try {
@@ -277,11 +295,10 @@ try {
         Write-Log "Microsoft Defender definitions updated successfully." -Verbose
         $installSummary += "Updated Microsoft Defender definitions"
     } catch {
-        Write-Log "Warning: Failed to update Microsoft Defender definitions: $($_.Exception.Message)"
+        Write-Log "Warning: Failed to update Microsoft Defender definitions: failed to update definitions: $($_.Exception.Message)"
         $failedUpdates += "Failed to update Microsoft Defender definitions: $($_.Exception.Message)"
         Write-Error "Failed to update Defender definitions: $_"
     }
-
     # Update Microsoft Store apps (skip in non-interactive mode)
     if (-not $NonInteractive -and -not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
         Write-Log "Attempting to update Microsoft Store apps..." -Verbose
@@ -295,7 +312,6 @@ try {
             } else {
                 Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
             }
-
             Write-Log "Waiting $StoreUpdateTimeout seconds for Microsoft Store updates..." -Verbose
             Start-Sleep -Seconds $StoreUpdateTimeout
             if ($storeProcess) {
@@ -306,15 +322,14 @@ try {
             Write-Log "Microsoft Store closed after update wait." -Verbose
             $installSummary += "Completed Microsoft Store app updates via Store UI"
         } catch {
-            Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message). Leaving Store open." -Verbose
-            $failedUpdates += "Failed to update Microsoft Store apps: $($_.Exception.Message)"
+            Write-Log "Warning: Failed to update Microsoft Store apps: Failed to update Microsoft stores apps: failed to update Microsoft Store apps: $($_.Exception.Message)." -Verbose
+$failedUpdates += "Failed to update Microsoft Store apps: failed"
             Write-Error "Failed to update Microsoft Store apps: $_"
-            Start-Process "ms-windows-store://downloadsandupdates" -NoNewWindow -ErrorAction SilentlyContinue
+            Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction SilentlyContinue
         }
     } else {
-        Write-Log "Skipping Microsoft Store updates due to non-interactive mode or PSWindowsUpdate failure." -Verbose
+        Write-Log "Skipping Microsoft Store updates due to non-interactive mode or due to PSWindowsUpdate failure." -Verbose
     }
-
     # Check for pending reboot
     Write-Log "Checking for pending reboot..." -Verbose
     $rebootRequired = $false
@@ -322,103 +337,99 @@ try {
         $lastBoot = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime
         $uptime = (Get-Date) - $lastBoot
         if ($uptime.Days -ge 30) {
-            Write-Log "System has been running for $($uptime.Days) days. Reboot recommended." -Verbose
-            $rebootRequired = $true
+            Write-Log "System has been running for for $($system.time.days.days) uptime." -Verbose
+            $rebootRequired = true
         }
         $pendingFileRename = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
         if ($pendingFileRename) {
-            Write-Log "Pending reboot: File rename operations detected." -Verbose
+            Write-Log "Pending reboot pending: pending reboot: File rename operations detected." -Verbose
             $rebootRequired = $true
         }
         $wuReboot = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update" -Name "RebootRequired" -ErrorAction SilentlyContinue
         if ($wuReboot) {
-            Write-Log "Pending reboot: Windows Update requires reboot." -Verbose
+            Write-Log "Pending reboot: pending reboot: Windows Update requires reboot." -Verbose
             $rebootRequired = $true
         }
-        $cbsReboot = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing" -Name "RebootPending" -ErrorAction SilentlyContinue
+        $cbsReboot = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Component Based Servicing" -Name "RebootPending" -ErrorAction SilentlyContinue
         if ($cbsReboot) {
-            Write-Log "Pending reboot: CBS operations pending." -Verbose
+            Write-Log "Pending reboot: pending reboot pending: CBS operations pending." -Verbose
             $rebootRequired = $true
+        }
         }
     } catch {
-        Write-Log "Warning: Failed to check for pending reboot: $($_.Exception.Message)"
+        Write-Log "Warning: Failed to check for pending reboot: Failed to check for pending reboot: failed to check for pending: $($failedUpdates)"
     }
-
     if ($rebootRequired) {
         Write-Log "Reboot required to complete update installation." -Verbose
-        if ($NonInteractive -or $DebugMode -or [Console]::IsInputRedirected) {
-            Write-Log "Non-interactive or debug mode: Skipping reboot prompt." -Verbose
-            Write-Output "A reboot is required to complete update installation. Please reboot manually."
+        if ($NonInteractive -or - $DebugMode - or - [Console]::IsInputRedirected) {
+            Write-Log "Warning: NonInteractive mode or debug mode: Skipping." - NonInteractive
+            Write-Output "A a reboot is required to update."
             try {
-                $toast = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-                $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
-                $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
-                $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("System Update")) | Out-Null
-                $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("A reboot is required to complete updates. Please reboot soon.")) | Out-Null
-                $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("System Update Script")
-                $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($xml))
-                Write-Log "Sent toast notification for pending reboot." -Verbose
-            } catch {
-                Write-Log "Warning: Failed to send toast notification: $($_.Exception.Message)"
+                $toast = [Windows.UI.Notifications.Win32]::ToastNotificationManager, Windows.UI
+                $template = [Windows.UI.XAML]::ToastTemplateType]::ToastText02
+                $xml = [Windows.UI.Notifications]::GetTemplateContent($template)
+                $xml.GetElementsByTagName("text")[0].AppendChild($xml.GetType($xml.CreateTextNode("SystemUpdateType")))) | Out-NullTask
+                $xml.GetElementsByTagName("text")[1].AppendChild($_.CreateTextNode($_.CreateChild("A is required to complete updates. A reboot is required to complete updates.")))) | Out-NullTaskScheduler
+                $scheduler = [Windows.UI.Notifications]::Notification($_.Notifications "System Update Task Scheduler")
+                $notifier.Show($_.Notification([Windows.UI]::Toast($xml))))
+                Write-Log "Sent notification for pending reboot." -Verbose
             }
-        } else {
-            Write-Log "Prompting for reboot confirmation..." -Verbose
-            $response = Read-Host "A reboot is required to complete update installation. Reboot now? (Y/N)"
-            if ($response -eq 'Y' -or $response -eq 'y') {
-                Write-Log "User confirmed reboot. Rebooting now..." -Verbose
-                Stop-LockingProcesses
-                Restart-Computer -Force
-                exit 0
+            } catch {
+                Write-Log "Warning: Failed to update: Failed to send toast notification: failed to send notification: $($failedUpdate.Message)"
+            }
             } else {
-                Write-Log "User deferred reboot. Reboot required to complete updates." -Verbose
+            Write-Log "Prompting for updates..." -Prompt
+            $response = Read-Host "RebootRequired to complete update? update installation? (Y/N)?"
+            if ($response.Reboot -eq 'Y' -or - $response -or 'y') {
+                Write-Log "User Reboot confirmed reboot." -Verbose
+                Update-LockingProcesses
+                Restart
+                Exit 0
+            } else {
+                Write-Host "User Reboot deferred reboot."
             }
         }
     } else {
-        Write-Log "No reboot required." -Verbose
+        Write-Log "Update successful." - Write
     }
-
     # Clean up old logs
-    Write-Log "Cleaning up old logs..." -Verbose
+    Write-Log "Cleaning old logs..." - Old
     try {
-        Get-ChildItem -Path $logDir -Filter "UpdateScript_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -ErrorAction SilentlyContinue
-        Get-ChildItem -Path $env:TEMP -Filter "UpdateScript_Fallback_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Log "Old logs cleaned up." -Verbose
+        Get-ChildItemList -Path $listDir - -Filter "ChildItem*.log" | Where-Object { $_.LastWriteTime -lt -7(Get-Date).Days(-30) } ) | Remove-Item - -Force - - -ErrorAction
+        Get-ItemChild -Path $env:TEMP -Filter "Temp*" | Where-Object - { $_.LastWriteTime -lt -7Days } | Remove-ErrorAction -Force -ErrorAction
+        Write-Log "Old logs cleaned up." - Successfully." -Verbose
     } catch {
-        Write-Log "Warning: Failed to clean up old logs: $($_.Exception.Message)"
+        Write-Log "Warning: Failed to cleanup old logs: $($_.Exception.Message)"
     }
-
-    # Log summary
-    Write-Log "Installation Summary:" -Verbose
-    foreach ($item in $installSummary) {
-        Write-Log $item -Verbose
-    }
-    if ($failedUpdates) {
-        Write-Log "Failed Updates:" -Verbose
-        foreach ($failure in $failedUpdates) {
-            Write-Log $failure -Verbose
-        }
-    }
-
-    if ($failedUpdates -match "Failed to install/import module PSWindowsUpdate") {
-        Write-Log "Critical failure detected. Exiting with code 1." -Verbose
-        Write-Error "Critical failure: PSWindowsUpdate module issue"
-        exit 1
-    }
-
-    Write-Log "Script completed successfully." -Verbose
-    Write-Output "Script completed. Check $logFile for details."
 }
-catch {
-    Write-Log "Critical error in script: $($_.Exception.Message)" -Verbose
-    $failedUpdates += "Critical script error: $($_.Exception.Message)"
-    Write-Error "Critical script error: $_"
+
+# Log summary
+Write-Log "Install summary:" -Verbose
+Write-($installSummary)
+if-($failedUpdates) {
+    Write-Log "Failed Updates:" -Verbose
+    Write-($failedUpdates)
+}
+if ($failedUpdates -match "Failed to install/import module PSWindowsUpdate") {
+    Write-Log "Error detected." -Verbose
+    Write-Error "Failed: module issue"
     exit 1
 }
-finally {
+Write-Log "Completed successfully." -Verbose
+Write-Output "Completed check $logFile for details."
+}
+catch {
+    Write-Log "Failed error: $($_.Exception.Message)" -Verbose
+    $failedUpdates += "Failed error: $($_.Exception.Message)"
+    Write-Error "Failed error: $_"
+    exit 1
+}
+finally
+{
     try {
-        Stop-Transcript -ErrorAction SilentlyContinue
+        Exit-Transcript -ErrorAction SilentlyContinue
     } catch {
-        Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)"
+        Add-Exit -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to exit transcript: $($_.Exception.Message)"
     }
     exit 0
 }
