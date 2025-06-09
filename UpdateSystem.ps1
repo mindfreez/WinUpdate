@@ -22,27 +22,6 @@ $installSummary = @()
 $psWindowsUpdateAvailable = $false
 $successfullyInstalledUpdates = $false
 
-# Ensure log directory exists
-try {
-    if (-not (Test-Path $logDir)) {
-        New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log directory created."
-    }
-} catch {
-    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
-    Write-Error "Failed to create log directory: $_"
-    exit 1
-}
-
-# Start transcript
-try {
-    Start-Transcript -Path $LogFile -Append -Force -ErrorAction Stop
-    Write-Log "Transcript started successfully." -Verbose
-} catch {
-    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $LogFile : $($_.Exception.Message)"
-    Write-Error "Failed to start transcript: $_"
-}
-
 # Function to log messages
 function Write-Log {
     param (
@@ -73,6 +52,27 @@ function Stop-LockingProcesses {
     } catch {
         Write-Log "Warning: Failed to stop locking processes: $($_.Exception.Message)"
     }
+}
+
+# Ensure log directory exists
+try {
+    if (-not (Test-Path $logDir)) {
+        New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log directory created."
+    }
+} catch {
+    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
+    Write-Error "Failed to create log directory: $_"
+    exit 1
+}
+
+# Start transcript
+try {
+    Start-Transcript -Path $LogFile -Append -Force -ErrorAction Stop
+    Write-Log "Transcript started successfully." -Verbose
+} catch {
+    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $LogFile : $($_.Exception.Message)"
+    Write-Error "Failed to start transcript: $_"
 }
 
 # Check execution policy
