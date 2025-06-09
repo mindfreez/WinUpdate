@@ -1,19 +1,22 @@
 # UpdateSystem.ps1
 # Purpose: Automate Windows Update, Defender definitions, and Microsoft Store updates with logging and reboot handling
-# Compatibility: Windows 7
+# Compatibility: Windows 10 and Windows 11
 # Requires: Administrative privileges; automatically installs PSWindowsUpdate if needed
-# Notes: Prefers PowerShell 7.x.x if available; minimizes console output to prevent duplicates
+# Notes: Prefers PowerShell 7.x if available; uses a single log file with append mode
 
 param (
     [switch]$DebugMode,
     [switch]$NonInteractive,
-    [int]$StoreUpdateTimeout = 180
+    [int]$StoreUpdateTimeout = 180,
+    [string]$LogFile
 )
 
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
-$logDir = "$env:ProgramData\SystemUpdate\Scripts"
-$logFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-$fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMddHHmmss').log"
+# Define log file path if not passed as parameter
+if (-not $LogFile) {
+    $LogFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+}
+$fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 $failedUpdates = @()
 $installSummary = @()
 $psWindowsUpdateAvailable = $false
@@ -23,7 +26,7 @@ $successfullyInstalledUpdates = $false
 try {
     if (-not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        Add-Content -Path $logFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log directory created."
+        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log directory created."
     }
 } catch {
     Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
@@ -33,9 +36,9 @@ try {
 
 # Start transcript
 try {
-    Start-Transcript -Path $logFile -Append -Force -ErrorAction Stop
+    Start-Transcript -Path $LogFile -Append -Force -ErrorAction Stop
 } catch {
-    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $logFile : $($_.Exception.Message)"
+    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $LogFile : $($_.Exception.Message)"
     Write-Error "Failed to start transcript: $_"
 }
 
@@ -46,7 +49,7 @@ function Write-Log {
         [switch]$Verbose
     )
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
-    Add-Content -Path $logFile -Value $logMessage -ErrorAction SilentlyContinue
+    Add-Content -Path $LogFile -Value $logMessage -ErrorAction SilentlyContinue
     if ($Verbose -or $DebugMode) {
         Write-Output $logMessage
     }
@@ -89,13 +92,13 @@ if ($currentPSVersion -lt 7) {
             $scriptContent = (Invoke-WebRequest -Uri $scriptUrl -ErrorAction Stop).Content
             $tempScriptPath = "$env:TEMP\UpdateSystem_$(Get-Date -Format 'yyyyMMdd_HHmmss').ps1"
             Set-Content -Path $tempScriptPath -Value $scriptContent -ErrorAction Stop
-            Write-Log "Saved script to temporary file: $tempScriptPath" -Verbose
+            Write-Log "Created temporary script file: $tempScriptPath" -Verbose
 
             # Build arguments for relaunch
             $args = "-NoProfile -ExecutionPolicy Bypass -File `"$tempScriptPath`""
             if ($DebugMode) { $args += " -DebugMode" }
             if ($NonInteractive) { $args += " -NonInteractive" }
-            $args += " -StoreUpdateTimeout $StoreUpdateTimeout"
+            $args += " -StoreUpdateTimeout $StoreUpdateTimeout -LogFile `"$LogFile`""
 
             Write-Log "Relaunching with command: $pwshPath $args" -Verbose
             $process = Start-Process -FilePath $pwshPath -ArgumentList $args -Wait -PassThru -ErrorAction Stop
@@ -454,7 +457,7 @@ try {
     }
 
     Write-Log "Script completed successfully." -Verbose
-    Write-Output "Script completed. Check $logFile for details."
+    Write-Output "Script completed. Check $LogFile for details."
 }
 catch {
     Write-Log "Critical error in script: $($_.Exception.Message)" -Verbose
