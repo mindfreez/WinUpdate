@@ -1,8 +1,8 @@
 # UpdateSystem.ps1
 # Purpose: Automate Windows Update, Defender definitions, and Microsoft Store updates with logging and reboot handling
-# Compatibility: Windows 10 and Windows 11
+# Compatibility: Windows 7
 # Requires: Administrative privileges; automatically installs PSWindowsUpdate if needed
-# Notes: Prefers PowerShell 7.x if available; minimizes console output to prevent duplicates
+# Notes: Prefers PowerShell 7.x.x if available; minimizes console output to prevent duplicates
 
 param (
     [switch]$DebugMode,
@@ -11,8 +11,9 @@ param (
 )
 
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
+$logDir = "$env:ProgramData\SystemUpdate\Scripts"
 $logFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-$fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMddHHmmss').log"
 $failedUpdates = @()
 $installSummary = @()
 $psWindowsUpdateAvailable = $false
@@ -305,9 +306,9 @@ try {
         Write-Error "Failed to update Defender definitions: $_"
     }
 
-    # Update Microsoft Store apps (skip in non-interactive mode)
-    if (-not $NonInteractive -and -not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
-        Write-Log "Attempting to update Microsoft Store apps..." -Verbose
+    # Update Microsoft Store apps (skip in non-interactive mode or PowerShell 7.x)
+    if (-not $NonInteractive -and -not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate") -and $PSVersionTable.PSEdition -eq "Desktop") {
+        Write-Log "Attempting to update Microsoft Store apps in PowerShell Desktop..." -Verbose
         try {
             # Check if Microsoft Store is installed
             $storeApp = Get-AppxPackage -Name "Microsoft.WindowsStore" -ErrorAction Stop
@@ -348,7 +349,7 @@ try {
             }
         }
     } else {
-        Write-Log "Skipping Microsoft Store updates due to non-interactive mode or PSWindowsUpdate failure." -Verbose
+        Write-Log "Skipping Microsoft Store updates due to non-interactive mode, PSWindowsUpdate failure, or PowerShell Core." -Verbose
     }
 
     # Check for pending reboot
@@ -388,7 +389,7 @@ try {
             try {
                 # Load Windows Runtime assemblies for toast notifications
                 Add-Type -AssemblyName System.Runtime.WindowsRuntime
-                $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
+                [WindowsRuntimeLoader.RuntimeLoader]::Load("Windows.UI.Notifications")
                 $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
                 $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
                 $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("System Update")) | Out-Null
