@@ -309,30 +309,43 @@ try {
     if (-not $NonInteractive -and -not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
         Write-Log "Attempting to update Microsoft Store apps..." -Verbose
         try {
-            Write-Log "Opening Microsoft Store for updates..." -Verbose
-            Start-Process "ms-windows-store://downloadsandupdates" -NoNewWindow -ErrorAction Stop
-            Write-Log "Microsoft Store launched." -Verbose
-            $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
-            if ($storeProcess) {
-                Write-Log "Microsoft Store process found (PID: $($storeProcess.Id))." -Verbose
-            } else {
-                Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
-            }
+            # Check if Microsoft Store is installed
+            $storeApp = Get-AppxPackage -Name "Microsoft.WindowsStore" -ErrorAction Stop
+            if ($storeApp) {
+                Write-Log "Microsoft Store app found: $($storeApp.Name) ($($storeApp.Version))" -Verbose
+                Write-Log "Opening Microsoft Store for updates..." -Verbose
+                Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction Stop
+                Write-Log "Microsoft Store launched." -Verbose
+                $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
+                if ($storeProcess) {
+                    Write-Log "Microsoft Store process found (PID: $($storeProcess.Id))." -Verbose
+                } else {
+                    Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
+                }
 
-            Write-Log "Waiting $StoreUpdateTimeout seconds for Microsoft Store updates..." -Verbose
-            Start-Sleep -Seconds $StoreUpdateTimeout
-            if ($storeProcess) {
-                Write-Log "Extending wait by 180 seconds for Microsoft Store updates..." -Verbose
-                Start-Sleep -Seconds 180
+                Write-Log "Waiting $StoreUpdateTimeout seconds for Microsoft Store updates..." -Verbose
+                Start-Sleep -Seconds $StoreUpdateTimeout
+                if ($storeProcess) {
+                    Write-Log "Extending wait by 180 seconds for Microsoft Store updates..." -Verbose
+                    Start-Sleep -Seconds 180
+                }
+                Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
+                Write-Log "Microsoft Store closed after update wait." -Verbose
+                $installSummary += "Completed Microsoft Store app updates via Store UI"
+            } else {
+                Write-Log "Warning: Microsoft Store app not installed. Skipping Store updates." -Verbose
+                $failedUpdates += "Microsoft Store app not installed"
             }
-            Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
-            Write-Log "Microsoft Store closed after update wait." -Verbose
-            $installSummary += "Completed Microsoft Store app updates via Store UI"
         } catch {
-            Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message). Leaving Store open." -Verbose
+            Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message)" -Verbose
             $failedUpdates += "Failed to update Microsoft Store apps: $($_.Exception.Message)"
             Write-Error "Failed to update Microsoft Store apps: $_"
-            Start-Process "ms-windows-store://downloadsandupdates" -NoNewWindow -ErrorAction SilentlyContinue
+            # Attempt to open Store as fallback
+            try {
+                Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction SilentlyContinue
+            } catch {
+                Write-Log "Warning: Fallback attempt to open Microsoft Store failed: $($_.Exception.Message)" -Verbose
+            }
         }
     } else {
         Write-Log "Skipping Microsoft Store updates due to non-interactive mode or PSWindowsUpdate failure." -Verbose
@@ -436,7 +449,6 @@ catch {
     Write-Log "Critical error in script: $($_.Exception.Message)" -Verbose
     $failedUpdates += "Critical script error: $($_.Exception.Message)"
     Write-Error "Critical script error: $_"
-    exit 1
 }
 finally {
     try {
