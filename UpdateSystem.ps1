@@ -5,7 +5,9 @@
 # Notes: Prefers PowerShell 7.x if available; minimizes console output to prevent duplicates
 
 param (
-    [switch]$DebugMode
+    [switch]$DebugMode,
+    [switch]$NonInteractive,
+    [int]$StoreUpdateTimeout = 180
 )
 
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
@@ -64,6 +66,13 @@ function Stop-LockingProcesses {
     }
 }
 
+# Check execution policy
+Write-Log "Checking execution policy..." -Verbose
+$execPolicy = Get-ExecutionPolicy -Scope CurrentUser
+if ($execPolicy -eq "Restricted" -or $execPolicy -eq "AllSigned") {
+    Write-Log "Warning: Execution policy is $execPolicy. Script may fail." -Verbose
+}
+
 # Check PowerShell version and relaunch in PowerShell 7.x if available
 Write-Log "Checking PowerShell version..." -Verbose
 $currentPSVersion = $PSVersionTable.PSVersion.Major
@@ -77,6 +86,8 @@ if ($currentPSVersion -lt 7) {
             $scriptPath = $MyInvocation.MyCommand.Path
             $args = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
             if ($DebugMode) { $args += " -DebugMode" }
+            if ($NonInteractive) { $args += " -NonInteractive" }
+            $args += " -StoreUpdateTimeout $StoreUpdateTimeout"
             Start-Process -FilePath $pwshPath -ArgumentList $args -Wait -NoNewWindow
             Write-Log "Script relaunched in PowerShell 7.x." -Verbose
             exit 0
@@ -116,10 +127,20 @@ try {
         Write-Log "Warning: Failed to detect system information: $($_.Exception.Message)" -Verbose
     }
 
-    # Check internet connectivity
+    # Check internet connectivity with retries
     Write-Log "Checking internet connectivity..." -Verbose
-    if (-not (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
-        Write-Log "Error: No internet connection detected." -Verbose
+    $networkRetries = 3
+    $networkSuccess = $false
+    for ($i = 0; $i -lt $networkRetries; $i++) {
+        if (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet -ErrorAction SilentlyContinue) {
+            $networkSuccess = $true
+            break
+        }
+        Write-Log "Network check attempt $($i + 1) failed. Retrying in 10 seconds..." -Verbose
+        Start-Sleep -Seconds 10
+    }
+    if (-not $networkSuccess) {
+        Write-Log "Error: No internet connection after $networkRetries attempts." -Verbose
         Write-Error "No internet connection detected."
         exit 1
     }
@@ -143,12 +164,12 @@ try {
         $psWindowsUpdateAvailable = $true
         Write-Log "PSWindowsUpdate module ready." -Verbose
     } catch {
-        Write-Log "Error: Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
+        Write-Log "Warning: Failed to install/import PSWindowsUpdate module: $($_.Exception.Message)"
         $failedUpdates += "Failed to install/import module PSWindowsUpdate: $($_.Exception.Message)"
         Write-Error "Failed to install/import PSWindowsUpdate module: $_"
-        exit 1
     }
 
+    # Install Windows Updates
     if ($psWindowsUpdateAvailable) {
         # Limit update attempts to prevent infinite loop
         $maxAttempts = 5
@@ -198,7 +219,7 @@ try {
                         foreach ($update in $nonSecurityUpdates) {
                             Write-Log "Non-Security Update: $($update.Title) (KB$($update.KBArticleIDs))" -Verbose
                         }
-                        $installNonSecurity = if ($DebugMode -or [Console]::IsInputRedirected) { 'Y' } else { Read-Host "Non-security updates are available. Install them now? (Y/N)" }
+                        $installNonSecurity = if ($NonInteractive -or $DebugMode -or [Console]::IsInputRedirected) { 'Y' } else { Read-Host "Non-security updates are available. Install them now? (Y/N)" }
                         if ($installNonSecurity -eq 'Y' -or $installNonSecurity -eq 'y') {
                             Write-Progress -Activity "Installing non-security updates" -Status "Starting..."
                             Install-WindowsUpdate -KBArticleID ($nonSecurityUpdates | ForEach-Object { $_.KBArticleIDs }) -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop | Out-Null
@@ -224,7 +245,27 @@ try {
             Start-Sleep -Seconds 60
         }
     } else {
-        Write-Log "PSWindowsUpdate unavailable. Skipping Windows updates." -Verbose
+        Write-Log "PSWindowsUpdate unavailable. Falling back to COM-based Windows Update..." -Verbose
+        try {
+            $updateSession = New-Object -ComObject Microsoft.Update.Session
+            $updateSearcher = $updateSession.CreateUpdateSearcher()
+            $searchResult = $updateSearcher.Search("IsInstalled=0")
+            if ($searchResult.Updates.Count -gt 0) {
+                Write-Log "Found $($searchResult.Updates.Count) updates via COM." -Verbose
+                $installer = $updateSession.CreateUpdateInstaller()
+                $installer.Updates = $searchResult.Updates
+                $installResult = $installer.Install()
+                Write-Log "COM-based update installation completed." -Verbose
+                $installSummary += "Installed updates via COM-based Windows Update"
+                $successfullyInstalledUpdates = $true
+            } else {
+                Write-Log "No updates found via COM-based Windows Update." -Verbose
+            }
+        } catch {
+            Write-Log "Error: COM-based update failed: $($_.Exception.Message)"
+            $failedUpdates += "COM-based update failed: $($_.Exception.Message)"
+            Write-Error "COM-based update failed: $_"
+        }
     }
 
     # Check for Microsoft Defender updates
@@ -241,8 +282,8 @@ try {
         Write-Error "Failed to update Defender definitions: $_"
     }
 
-    # Update Microsoft Store apps
-    if (-not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
+    # Update Microsoft Store apps (skip in non-interactive mode)
+    if (-not $NonInteractive -and -not ($failedUpdates -match "Failed to install/import module PSWindowsUpdate")) {
         Write-Log "Attempting to update Microsoft Store apps..." -Verbose
         try {
             Write-Log "Opening Microsoft Store for updates..." -Verbose
@@ -255,25 +296,15 @@ try {
                 Write-Log "Warning: Microsoft Store process not found after launch." -Verbose
             }
 
-            $waitSeconds = 180  # Reduced timeout for Task Scheduler
-            if (-not $DebugMode -and -not [Console]::IsInputRedirected) {
-                Write-Log "Waiting $waitSeconds seconds for Microsoft Store updates..." -Verbose
-                Start-Sleep -Seconds $waitSeconds
-                Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
-                Write-Log "Microsoft Store closed after fixed wait." -Verbose
-                $installSummary += "Completed Microsoft Store app updates via Store UI"
-            } else {
-                Write-Log "Debug mode or non-interactive: Waiting $waitSeconds seconds for Microsoft Store updates..." -Verbose
-                Start-Sleep -Seconds $waitSeconds
-                $storeProcess = Get-Process -Name "WinStore.App" -ErrorAction SilentlyContinue
-                if ($storeProcess) {
-                    Write-Log "Extending wait by 180 seconds for Microsoft Store updates..." -Verbose
-                    Start-Sleep -Seconds 180
-                }
-                Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
-                Write-Log "Microsoft Store closed after update wait." -Verbose
-                $installSummary += "Completed Microsoft Store app updates via Store UI"
+            Write-Log "Waiting $StoreUpdateTimeout seconds for Microsoft Store updates..." -Verbose
+            Start-Sleep -Seconds $StoreUpdateTimeout
+            if ($storeProcess) {
+                Write-Log "Extending wait by 180 seconds for Microsoft Store updates..." -Verbose
+                Start-Sleep -Seconds 180
             }
+            Stop-Process -Name "WinStore.App" -Force -ErrorAction SilentlyContinue
+            Write-Log "Microsoft Store closed after update wait." -Verbose
+            $installSummary += "Completed Microsoft Store app updates via Store UI"
         } catch {
             Write-Log "Warning: Failed to update Microsoft Store apps: $($_.Exception.Message). Leaving Store open." -Verbose
             $failedUpdates += "Failed to update Microsoft Store apps: $($_.Exception.Message)"
@@ -281,7 +312,7 @@ try {
             Start-Process "ms-windows-store://downloadsandupdates" -NoNewWindow -ErrorAction SilentlyContinue
         }
     } else {
-        Write-Log "Skipping Microsoft Store updates due to PSWindowsUpdate failure." -Verbose
+        Write-Log "Skipping Microsoft Store updates due to non-interactive mode or PSWindowsUpdate failure." -Verbose
     }
 
     # Check for pending reboot
@@ -315,9 +346,21 @@ try {
 
     if ($rebootRequired) {
         Write-Log "Reboot required to complete update installation." -Verbose
-        if ($DebugMode -or [Console]::IsInputRedirected) {
-            Write-Log "Debug mode or non-interactive: Skipping reboot prompt." -Verbose
+        if ($NonInteractive -or $DebugMode -or [Console]::IsInputRedirected) {
+            Write-Log "Non-interactive or debug mode: Skipping reboot prompt." -Verbose
             Write-Output "A reboot is required to complete update installation. Please reboot manually."
+            try {
+                $toast = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+                $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
+                $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
+                $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("System Update")) | Out-Null
+                $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("A reboot is required to complete updates. Please reboot soon.")) | Out-Null
+                $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("System Update Script")
+                $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($xml))
+                Write-Log "Sent toast notification for pending reboot." -Verbose
+            } catch {
+                Write-Log "Warning: Failed to send toast notification: $($_.Exception.Message)"
+            }
         } else {
             Write-Log "Prompting for reboot confirmation..." -Verbose
             $response = Read-Host "A reboot is required to complete update installation. Reboot now? (Y/N)"
@@ -338,6 +381,7 @@ try {
     Write-Log "Cleaning up old logs..." -Verbose
     try {
         Get-ChildItem -Path $logDir -Filter "UpdateScript_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $env:TEMP -Filter "UpdateScript_Fallback_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force -ErrorAction SilentlyContinue
         Write-Log "Old logs cleaned up." -Verbose
     } catch {
         Write-Log "Warning: Failed to clean up old logs: $($_.Exception.Message)"
