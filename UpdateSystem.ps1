@@ -14,7 +14,7 @@ param (
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
 # Define log file path if not passed as parameter
 if (-not $LogFile) {
-    $LogFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    $LogFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss')_$(Get-Random).log"
 }
 $fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 $failedUpdates = @()
@@ -42,16 +42,37 @@ function Write-Log {
     }
 }
 
-# Function to stop processes that may lock updates
-function Stop-LockingProcesses {
-    Write-Log "Stopping processes that may lock updates..." -Verbose
-    try {
-        Stop-Process -Name "msedge" -Force -ErrorAction SilentlyContinue
-        Stop-Process -Name "storeapp" -Force -ErrorAction SilentlyContinue
-        Write-Log "Locking processes stopped." -Verbose
-    } catch {
-        Write-Log "Warning: Failed to stop locking processes: $($_.Exception.Message)"
+# Ensure log directory exists and handle file locks with retry
+$logDir = "$env:ProgramData\SystemUpdateScript\Logs"
+try {
+    if (-not (Test-Path $logDir)) {
+        New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log directory created." -ErrorAction Continue
+    } else {
+        $maxAttempts = 3
+        $attempt = 0
+        while ($attempt -lt $maxAttempts) {
+            if (Test-Path $LogFile) {
+                try {
+                    [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None).Close()
+                    break
+                } catch {
+                    if ($attempt -eq $maxAttempts - 1) {
+                        Remove-Item -Path $LogFile -Force -ErrorAction SilentlyContinue
+                        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Previous log file lock released after $maxAttempts attempts." -ErrorAction Continue
+                    }
+                    Start-Sleep -Seconds 1
+                    $attempt++
+                }
+            } else {
+                break
+            }
+        }
     }
+} catch {
+    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create or access log directory $logDir : $($_.Exception.Message)"
+    Write-Error "Failed to create or access log directory: $_"
+    exit 1
 }
 
 # Function to clean Windows Update cache
@@ -90,18 +111,6 @@ function Test-DiskSpace {
         $failedUpdates += "Failed to check disk space: $($_.Exception.Message)"
         return $false
     }
-}
-
-# Ensure log directory exists
-try {
-    if (-not (Test-Path $logDir)) {
-        New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Log directory created."
-    }
-} catch {
-    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create log directory $logDir : $($_.Exception.Message)"
-    Write-Error "Failed to create log directory: $_"
-    exit 1
 }
 
 # Start transcript
