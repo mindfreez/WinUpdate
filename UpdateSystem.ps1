@@ -17,7 +17,7 @@ param (
 
 $logDir = "$env:ProgramData\SystemUpdateScript\Logs"
 if (-not $LogFile) {
-    $LogFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss')_$(Get-Random).log"
+    $LogFile = "$logDir\UpdateScript_$(Get-Date -Format 'yyyyMMdd_HHmmss')_$(New-Guid).log"
 }
 $fallbackLogFile = "$env:TEMP\UpdateScript_Fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 $failedUpdates = @()
@@ -45,15 +45,23 @@ function Write-Log {
     )
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): $Message"
     try {
-        Add-Content -Path $LogFile -Value $logMessage -ErrorAction Stop
+        [System.IO.File]::AppendAllText($LogFile, "$logMessage`n", [System.Text.Encoding]::UTF8)
     } catch {
-        Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error writing to main log: $($_.Exception.Message)"
+        try {
+            [System.IO.File]::AppendAllText($fallbackLogFile, "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error writing to main log: $($_.Exception.Message)`n", [System.Text.Encoding]::UTF8)
+        } catch {
+            # Suppress further errors to prevent infinite loop
+        }
     }
     if ($Verbose -or $DebugMode) {
         Write-Output $logMessage
     }
-    if (-not $Verbose -and -not $DebugMode) {
-        Add-Content -Path $fallbackLogFile -Value $logMessage -ErrorAction SilentlyContinue
+    try {
+        if (-not $Verbose -and -not $DebugMode) {
+            [System.IO.File]::AppendAllText($fallbackLogFile, "$logMessage`n", [System.Text.Encoding]::UTF8)
+        }
+    } catch {
+        # Suppress errors
     }
 }
 
@@ -68,7 +76,7 @@ try {
         while ($attempt -lt $maxAttempts) {
             if (Test-Path $LogFile) {
                 try {
-                    [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None).Close()
+                    [System.IO.FileStream]::new($LogFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None).Dispose()
                     break
                 } catch {
                     if ($attempt -eq $maxAttempts - 1) {
@@ -84,7 +92,7 @@ try {
         }
     }
 } catch {
-    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create or access log directory $logDir : $($_.Exception.Message)"
+    [System.IO.File]::AppendAllText($fallbackLogFile, "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to create or access log directory $logDir : $($_.Exception.Message)`n")
     Write-Error "Failed to create or access log directory: $_"
     exit 1
 }
@@ -132,7 +140,7 @@ try {
     Start-Transcript -Path $LogFile -Append -Force -ErrorAction Stop
     Write-Log "Transcript started successfully." -Verbose
 } catch {
-    Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to start transcript for $LogFile : $($_.Exception.Message)"
+    Write-Log "Error: Failed to start transcript for $LogFile : $($_.Exception.Message)" -Verbose
     Write-Error "Failed to start transcript: $_"
 }
 
@@ -158,7 +166,7 @@ Write-Log "Current PowerShell version: $currentPSVersion" -Verbose
 
 if ($currentPSVersion -lt 7) {
     $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
-    if ($pwshPath) {
+    if ($pwshPath -and (Test-Path $pwshPath) -and $PSCommandPath) {
         Write-Log "PowerShell 7.x found at $pwshPath. Relaunching script in PowerShell 7.x..." -Verbose
         try {
             $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
@@ -174,10 +182,11 @@ if ($currentPSVersion -lt 7) {
             exit $process.ExitCode
         } catch {
             Write-Log "Error relaunching in PowerShell 7.x: $($_.Exception.Message)" -Verbose
+            [System.IO.File]::AppendAllText($fallbackLogFile, "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error relaunching in PowerShell 7.x: $($_.Exception.Message)`n")
             Write-Log "Falling back to PowerShell $currentPSVersion." -Verbose
         }
     } else {
-        Write-Log "PowerShell 7.x not found. Continuing with PowerShell $currentPSVersion." -Verbose
+        Write-Log "PowerShell 7.x not found or invalid script path ($PSCommandPath). Continuing with PowerShell $currentPSVersion." -Verbose
     }
 } else {
     Write-Log "Running in PowerShell $currentPSVersion. No relaunch needed." -Verbose
@@ -474,7 +483,7 @@ try {
             $failedUpdates += "Failed to update Microsoft Store apps: $($_.Exception.Message)"
         }
     } else {
-        Write-Log "Skipping Microsoft Store updates in non-interactive mode." -Verbose
+        Write-Log "Skipping Microsoft Store updates." -Verbose
     }
 
     # Check for pending reboot
@@ -484,7 +493,7 @@ try {
         $lastBoot = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime
         $uptime = (Get-Date) - $lastBoot
         if ($uptime.Days -ge 30) {
-            Write-Log "System running for $($uptime.Days) days. Reboot recommended." -Verbose
+            Write-Log "System uptime: $($uptime.Days) days. Reboot recommended." -Verbose
             $rebootRequired = $true
         }
         $pendingFileRename = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
@@ -514,7 +523,7 @@ try {
     if ($rebootRequired) {
         Write-Log "Reboot required to complete update installation." -Verbose
         if ($NonInteractive -or $DebugMode -or [Console]::IsInputRedirected) {
-            Write-Log "Non-interactive mode: Skipping reboot prompt." -Verbose
+            Write-Log "Non-interactive mode: Skipping reboot." -Verbose
             Write-Output "A reboot is required to complete update installation. Please reboot manually."
             try {
                 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -534,54 +543,54 @@ try {
                 } catch {
                     Write-Log "Warning: Failed to send fallback message box: $($_.Exception.Message)" -Verbose
                     try {
-                        Write-EventLog -LogName Application -Source "System Update Script" -EntryType Warning -EventId 1001 -Message "A reboot is required to complete updates. Please reboot soon." -ErrorAction Stop
-                        Write-Log "Wrote reboot notification to Event Log." -Verbose
+                        Write-EventLog -LogName Application -Source "System Update Script" -EntryType Warning -EventId 1 -Message "A reboot is required to complete updates. Please reboot soon." -ErrorAction Stop
+                        Write-Log "Wrote to Event Log for pending reboot." -Verbose
                     } catch {
                         Write-Log "Error: Failed to write to Event Log: $($_.Exception.Message)" -Verbose
                     }
                 }
             }
         } else {
-            Write-Log "Prompting for reboot confirmation..." -Verbose
+            Write-Log "Prompting for reboot..." -Verbose
             $response = Read-Host "A reboot is required to complete update installation. Reboot now? (Y/N)"
             if ($response -eq 'Y' -or $response -eq 'y') {
-                Write-Log "User confirmed reboot. Rebooting now..." -Verbose
+                Write-Log "Rebooting now..." -Verbose
                 Restart-Computer -Force
                 exit 0
             } else {
-                Write-Log "User deferred reboot. Reboot required to complete updates." -Verbose
+                Write-Log "Reboot deferred." -Verbose
             }
         }
     } else {
         Write-Log "No reboot required." -Verbose
     }
 
-    # Clean up old logs
+    # Cleanup old logs
     Write-Log "Cleaning up old logs..." -Verbose
     try {
-        Get-ChildItem -Path $logDir -Filter "UpdateScript_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $logDir -Filter "*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -ErrorAction SilentlyContinue
         Get-ChildItem -Path $env:TEMP -Filter "UpdateScript_Fallback_*.log" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Log "Old logs cleaned up." -Verbose
+        Write-Log "Old logs cleaned up successfully." -Verbose
     } catch {
-        Write-Log "Warning: Failed to clean up old logs: $($_.Exception.Message)"
+        Write-Log "Warning: Failed to clean up old logs: $($_.Exception.Message)" -Verbose
     }
 
-    # Send failure report email (configure SMTP settings)
-    if ($failedUpdates) {
-        try {
-            $smtpParams = @{
-                SmtpServer = "smtp.example.com"
-                From = "script@example.com"
-                To = "admin@example.com"
-                Subject = "UpdateSystem.ps1 Failure Report"
-                Body = "Failed updates:\n$($failedUpdates | Out-String)"
-            }
-            Send-MailMessage @smtpParams -ErrorAction Stop
-            Write-Log "Sent failure report email." -Verbose
-        } catch {
-            Write-Log "Warning: Failed to send failure report email: $($_.Exception.Message)" -Verbose
-        }
-    }
+    # Send failure report email (disabled until configured)
+    # if ($failedUpdates) {
+    #     try {
+    #         $smtpParams = @{
+    #             SmtpServer = "smtp.example.com"
+    #             From = "script@example.com"
+    #             To = "admin@example.com"
+    #             Subject = "UpdateSystem.ps1 Failure Report"
+    #             Body = "Failed updates:\n$($failedUpdates | Out-String)"
+    #         }
+    #         Send-MailMessage @smtpParams -ErrorAction Stop
+    #         Write-Log "Sent failure report email." -Verbose
+    #     } catch {
+    #         Write-Log "Warning: Failed to send failure report email: $($_.Exception.Message)" -Verbose
+    #     }
+    # }
 
     # Log summary
     Write-Log "Installation Summary:" -Verbose
@@ -596,7 +605,7 @@ try {
     }
 
     if ($failedUpdates -match "Failed to install/import module PSWindowsUpdate") {
-        Write-Log "Critical failure detected. Exiting with code 1." -Verbose
+        Write-Log "Error: Critical failure detected. Exiting with code 1." -Verbose
         Write-Error "Critical failure: PSWindowsUpdate module issue"
         exit 1
     }
@@ -614,7 +623,7 @@ finally {
         Stop-Transcript -ErrorAction SilentlyContinue
         Write-Log "Transcript stopped successfully." -Verbose
     } catch {
-        Add-Content -Path $fallbackLogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)"
+        [System.IO.File]::AppendAllText($fallbackLogFile, "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): Error: Failed to stop transcript: $($_.Exception.Message)`n")
     }
     exit 0
 }
