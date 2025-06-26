@@ -43,7 +43,9 @@ try {
     Write-Output "$(Get-Date): Sufficient disk space ($freeSpaceGB GB)" | Out-File -FilePath $logFile -Append
 } catch {
     Write-Output "$(Get-Date): Error checking disk space: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
-    Write-Host "Error checking disk space: $($_.Exception.Message)"
+    Write-Host "Error checkingาสตร์
+
+System: disk space: $($_.Exception.Message)"
     pause
     exit 1
 }
@@ -141,9 +143,13 @@ try {
 # Check for Defender updates
 Write-Output "$(Get-Date): Checking for Microsoft Defender updates..." | Out-File -FilePath $logFile -Append
 try {
-    Import-Module -Name Defender -SkipEditionCheck -ErrorAction Stop
-    Update-MpSignature -ErrorAction Stop -Verbose *>> $logFile
-    Write-Output "$(Get-Date): Microsoft Defender definitions updated" | Out-File -FilePath $logFile -Append
+    if (Get-Module -ListAvailable -Name Defender) {
+        Import-Module -Name Defender -ErrorAction Stop
+        Update-MpSignature -ErrorAction Stop -Verbose *>> $logFile
+        Write-Output "$(Get-Date): Microsoft Defender definitions updated" | Out-File -FilePath $logFile -Append
+    } else {
+        Write-Output "$(Get-Date): Defender module not available, skipping Defender updates" | Out-File -FilePath $logFile -Append
+    }
 } catch {
     Write-Output "$(Get-Date): Failed to update Defender definitions: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
 }
