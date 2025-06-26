@@ -14,7 +14,7 @@ if (-not $isAdmin) {
     Write-Host "Relaunching as Administrator..."
     if ($IsMemoryExecution) {
         try {
-            Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mindfreez/WinUpdate/main/CheckUpdates.ps1' -UseBasicParsing).Content)`"" -Verb RunAs
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mindfreez/WinUpdate/main/UpdateSystem.ps1' -UseBasicParsing).Content)`"" -Verb RunAs
             Write-Output "$(Get-Date): Admin relaunch initiated" | Out-File -FilePath $logFile -Append
         } catch {
             Write-Output "$(Get-Date): Error relaunching as admin: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
@@ -93,7 +93,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7 -and $pwshCmd) {
     Write-Host "Relaunching in PowerShell 7..."
     if ($IsMemoryExecution) {
         try {
-            Start-Process -FilePath $pwshCmd.Source -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mindfreez/WinUpdate/main/CheckUpdates.ps1' -UseBasicParsing).Content)`"" -Verb RunAs
+            Start-Process -FilePath $pwshCmd.Source -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mindfreez/WinUpdate/main/UpdateSystem.ps1' -UseBasicParsing).Content)`"" -Verb RunAs
             Write-Output "$(Get-Date): PowerShell 7 relaunch initiated" | Out-File -FilePath $logFile -Append
         } catch {
             Write-Output "$(Get-Date): Error relaunching in PowerShell 7: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
