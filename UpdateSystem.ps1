@@ -7,7 +7,7 @@ Write-Output "$(Get-Date): Script started, checking admin privileges..." | Out-F
 if (-not $isAdmin) {
     Write-Output "$(Get-Date): Not running as admin, attempting to relaunch..." | Out-File -FilePath $logFile -Append
     try {
-        Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -Wait
+        Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/yourusername/yourrepo/main/CheckUpdates.ps1' -UseBasicParsing).Content)`"" -Verb RunAs -Wait
         Write-Output "$(Get-Date): Admin relaunch initiated" | Out-File -FilePath $logFile -Append
     } catch {
         Write-Output "$(Get-Date): Error relaunching as admin: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
@@ -43,9 +43,7 @@ try {
     Write-Output "$(Get-Date): Sufficient disk space ($freeSpaceGB GB)" | Out-File -FilePath $logFile -Append
 } catch {
     Write-Output "$(Get-Date): Error checking disk space: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
-    Write-Host "Error checkingาสตร์
-
-System: disk space: $($_.Exception.Message)"
+    Write-Host "Error checking disk space: $($_.Exception.Message)"
     pause
     exit 1
 }
@@ -72,7 +70,7 @@ if ($currentPSVersion -lt 7) {
             }
             Write-Output "$(Get-Date): Relaunching in PowerShell 7" | Out-File -FilePath $logFile -Append
             try {
-                Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -Wait
+                Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/yourusername/yourrepo/main/CheckUpdates.ps1' -UseBasicParsing).Content)`"" -Verb RunAs -Wait
                 Write-Output "$(Get-Date): PowerShell 7 relaunch initiated" | Out-File -FilePath $logFile -Append
             } catch {
                 Write-Output "$(Get-Date): Error relaunching in PowerShell 7: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
@@ -95,7 +93,7 @@ if ($currentPSVersion -lt 7) {
             Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $installerPath /quiet /norestart" -Wait -ErrorAction Stop
             Write-Output "$(Get-Date): PowerShell 7 installed" | Out-File -FilePath $logFile -Append
             Write-Output "$(Get-Date): Relaunching in PowerShell 7" | Out-File -FilePath $logFile -Append
-            Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -Wait
+            Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"Invoke-Expression ((Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/yourusername/yourrepo/main/CheckUpdates.ps1' -UseBasicParsing).Content)`"" -Verb RunAs -Wait
             Write-Output "$(Get-Date): PowerShell 7 relaunch initiated" | Out-File -FilePath $logFile -Append
         } catch {
             Write-Output "$(Get-Date): Error installing PowerShell 7: $($_.Exception.Message)" | Out-File -FilePath $logFile -Append
